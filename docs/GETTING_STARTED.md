@@ -258,23 +258,23 @@ Important:
 - the operator/admin entrypoint is `/admin`
 - the root URL currently redirects to `/chat`, but `/chat` is the explicit browser UI entrypoint
 
-## A2A Task 能力速览
+## A2A Task Quick View
 
-如果你启用了 A2A（`OpenClaw:MicrosoftAgentFramework:EnableA2A=true`），默认会暴露：
+If A2A is enabled (`OpenClaw:MicrosoftAgentFramework:EnableA2A=true`), OpenClaw exposes:
 
 - HTTP+JSON: `/a2a`
 - JSON-RPC: `/a2a/rpc`
 - Agent Card: `/.well-known/agent-card.json`
 
-A2A 请求会运行在 task 上下文中，`message:send` 和 `message:stream` 都对应 task 语义。流式请求会按标准生命周期推进：
+A2A requests run with protocol task semantics. `message:send` and `message:stream` both execute in task context, and streaming follows the standard lifecycle:
 
 - `submitted`
 - `working`
-- `completed` 或 `failed`
+- terminal `completed` or `failed`
 
-另外，A2A 取消路径已接入 task 取消；当前 task store 为内存实现，进程重启后不会保留 task 状态。
+Task cancellation is wired through the A2A handler when a task id is provided. The current task store is in-memory (`ITaskStore`), so task state is not durable across process restarts.
 
-完整说明见 [a2a.md](a2a.md)。
+For the full A2A behavior and operator notes, see [a2a.md](a2a.md).
 
 ### If You Start The Gateway Directly From Visual Studio
 
