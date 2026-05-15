@@ -11,6 +11,7 @@ artifacts/
 *.suo
 *.userosscache
 *.sln.docstates
+*.csproj.lscache
 
 # OS
 .DS_Store
