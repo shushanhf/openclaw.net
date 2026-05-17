@@ -71,13 +71,24 @@ public sealed class WindowConfirmationDialogService(Window owner) : IConfirmatio
             }
         };
 
+        var cancellationRequested = false;
+        dialog.Opened += (_, _) =>
+        {
+            if (cancellationRequested)
+                dialog.Close();
+        };
+
         using var cancellationRegistration = cancellationToken.Register(() =>
             Dispatcher.UIThread.Post(() =>
             {
                 result = false;
+                cancellationRequested = true;
                 if (dialog.IsVisible)
                     dialog.Close();
             }));
+
+        if (cancellationToken.IsCancellationRequested)
+            return false;
 
         await dialog.ShowDialog(owner);
         return result && !cancellationToken.IsCancellationRequested;
