@@ -4794,7 +4794,7 @@ public sealed class GatewayAdminEndpointTests
     [Fact]
     public async Task AdminUi_ContainsDedicatedWhatsAppSetupControls()
     {
-        var adminHtmlPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/admin.html"));
+        var adminHtmlPath = Path.GetFullPath(Path.Join(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/admin.html"));
         var html = await File.ReadAllTextAsync(adminHtmlPath);
 
         Assert.Contains("id=\"whatsapp-section\"", html, StringComparison.Ordinal);
@@ -5105,7 +5105,7 @@ public sealed class GatewayAdminEndpointTests
             .Where(static pattern => !string.IsNullOrWhiteSpace(pattern))
             .ToHashSet(StringComparer.Ordinal);
 
-        var adminHtmlPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/admin.html"));
+        var adminHtmlPath = Path.GetFullPath(Path.Join(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/admin.html"));
         var html = await File.ReadAllTextAsync(adminHtmlPath);
         var matches = Regex.Matches(html, @"(?:api|mutate)\('(?<route>/[^']+)'");
         var staticRoutes = matches
@@ -5121,7 +5121,7 @@ public sealed class GatewayAdminEndpointTests
     [Fact]
     public async Task WebChat_ToolFailures_AreRenderedInTranscript()
     {
-        var webChatHtmlPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/webchat.html"));
+        var webChatHtmlPath = Path.GetFullPath(Path.Join(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/webchat.html"));
         var html = await File.ReadAllTextAsync(webChatHtmlPath);
 
         Assert.Contains("function isToolFailureEnvelope", html, StringComparison.Ordinal);
@@ -5130,13 +5130,30 @@ public sealed class GatewayAdminEndpointTests
         Assert.Contains("refreshChatState()", html, StringComparison.Ordinal);
         Assert.Contains("case 'tool_result':", html, StringComparison.Ordinal);
         Assert.Contains("if (isToolFailureEnvelope(env))", html, StringComparison.Ordinal);
-        Assert.Contains("appendSystem(explainToolFailure(env), true);", html, StringComparison.Ordinal);
+        Assert.Contains("appendToolFailure(explainToolFailure(env));", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WebChat_ToolApprovalModal_RendersAndSendsDecisions()
+    {
+        var webChatHtmlPath = Path.GetFullPath(Path.Join(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/webchat.html"));
+        var html = await File.ReadAllTextAsync(webChatHtmlPath);
+
+        Assert.Contains("id=\"approval-modal\"", html, StringComparison.Ordinal);
+        Assert.Contains("case 'tool_approval_required':", html, StringComparison.Ordinal);
+        Assert.Contains("enqueueToolApproval(env);", html, StringComparison.Ordinal);
+        Assert.Contains("approvalRisk.textContent = activeApproval.riskHint || activeApproval.mutationHint || activeApproval.text || activeApproval.content", html, StringComparison.Ordinal);
+        Assert.Contains("type: 'tool_approval_decision'", html, StringComparison.Ordinal);
+        Assert.Contains("approvalId,", html, StringComparison.Ordinal);
+        Assert.Contains("approved", html, StringComparison.Ordinal);
+        Assert.Contains("approvalApproveButton.addEventListener('click', () => decideToolApproval(true));", html, StringComparison.Ordinal);
+        Assert.Contains("approvalDenyButton.addEventListener('click', () => decideToolApproval(false));", html, StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task WebChat_A2UiReset_ClearsAllSurfaces()
     {
-        var webChatHtmlPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/webchat.html"));
+        var webChatHtmlPath = Path.GetFullPath(Path.Join(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/webchat.html"));
         var html = await File.ReadAllTextAsync(webChatHtmlPath);
         var normalizedHtml = html.Replace("\r\n", "\n", StringComparison.Ordinal);
 
@@ -5150,7 +5167,7 @@ public sealed class GatewayAdminEndpointTests
     [Fact]
     public async Task AdminHtml_ExposesSetupVerifyAndFirstOperatorWizard()
     {
-        var adminHtmlPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/admin.html"));
+        var adminHtmlPath = Path.GetFullPath(Path.Join(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/admin.html"));
         var html = await File.ReadAllTextAsync(adminHtmlPath);
 
         Assert.Contains("id=\"setup-verify-button\"", html, StringComparison.Ordinal);
