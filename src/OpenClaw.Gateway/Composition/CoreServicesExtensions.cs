@@ -187,6 +187,7 @@ internal static class CoreServicesExtensions
         services.AddSingleton<IAutomationRunDispatcher>(sp => sp.GetRequiredService<AutomationRunCoordinator>());
         services.AddSingleton<GatewayAutomationService>();
         services.AddSingleton<LearningService>();
+        services.AddSingleton<HarnessContractService>();
         services.AddSingleton<AgentWorkflowRegistry>();
         services.AddSingleton<ICronJobSource, GatewayCronJobSource>();
         services.AddSingleton<ActorRateLimitService>(sp =>
@@ -235,6 +236,9 @@ internal static class CoreServicesExtensions
 
     private static void AddFeatureStores(IServiceCollection services, GatewayConfig config)
     {
+        services.AddSingleton<FileHarnessContractStore>(_ => new FileHarnessContractStore(config.Memory.StoragePath));
+        services.AddSingleton<IHarnessContractStore>(sp => sp.GetRequiredService<FileHarnessContractStore>());
+
         if (string.Equals(config.Memory.Provider, "sqlite", StringComparison.OrdinalIgnoreCase))
         {
             services.AddSingleton<SqliteFeatureStore>(_ => new SqliteFeatureStore(ResolveSqliteDbPath(config)));

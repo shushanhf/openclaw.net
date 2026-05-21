@@ -899,6 +899,7 @@
         <a href="#heartbeat-section">Heartbeat</a>
         <a href="#automation-section">Automations</a>
         <a href="#learning-section">Learning</a>
+        <a href="#harness-section">Harness</a>
         <a href="#memory-section">Memory</a>
         <a href="#integration-section">Integration</a>
         <a href="#ops-section">Ops</a>
@@ -1315,6 +1316,47 @@
                 </div>
                 <textarea id="learning-reason-input" rows="4" placeholder="Optional review note or rollback reason"></textarea>
                 <div id="learning-detail-output" class="muted" style="margin-top:0.75rem;">Select a proposal.</div>
+            </div>
+        </section>
+
+        <section id="harness-section" class="grid">
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Harness Contracts</h2>
+                        <div class="muted">Inspect passive plan records for higher-risk or multi-step agent work.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="harness-refresh-button" class="secondary">Reload</button>
+                    </div>
+                </div>
+                <div class="filters">
+                    <select id="harness-status-input">
+                        <option value="">All statuses</option>
+                        <option value="draft">Draft</option>
+                        <option value="proposed">Proposed</option>
+                        <option value="approved">Approved</option>
+                        <option value="executing">Executing</option>
+                        <option value="verified">Verified</option>
+                        <option value="failed">Failed</option>
+                        <option value="rejected">Rejected</option>
+                        <option value="rolled_back">Rolled back</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                    <select id="harness-risk-input">
+                        <option value="">All risk levels</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                    </select>
+                    <input id="harness-tag-input" type="text" placeholder="Tag filter">
+                </div>
+                <div id="harness-list-output" class="muted">Loading…</div>
+            </div>
+            <div class="card">
+                <h2>Contract Detail</h2>
+                <div id="harness-detail-output" class="muted">Select a harness contract.</div>
             </div>
         </section>
 
@@ -2143,6 +2185,11 @@
         const learningStatusInput = document.getElementById('learning-status-input');
         const learningKindInput = document.getElementById('learning-kind-input');
         const learningReasonInput = document.getElementById('learning-reason-input');
+        const harnessListOutput = document.getElementById('harness-list-output');
+        const harnessDetailOutput = document.getElementById('harness-detail-output');
+        const harnessStatusInput = document.getElementById('harness-status-input');
+        const harnessRiskInput = document.getElementById('harness-risk-input');
+        const harnessTagInput = document.getElementById('harness-tag-input');
         const memorySearchInput = document.getElementById('memory-search-input');
         const memoryPrefixInput = document.getElementById('memory-prefix-input');
         const memoryClassFilterInput = document.getElementById('memory-class-filter-input');
@@ -2263,6 +2310,10 @@
             templates: []
         };
         let learningState = {
+            selectedId: null,
+            detail: null
+        };
+        let harnessState = {
             selectedId: null,
             detail: null
         };
@@ -4383,6 +4434,84 @@
             }
         }
 
+        async function loadHarnessContracts() {
+            const params = new URLSearchParams();
+            if (harnessStatusInput.value) params.set('status', harnessStatusInput.value);
+            if (harnessRiskInput.value) params.set('riskLevel', harnessRiskInput.value);
+            if (harnessTagInput.value.trim()) params.set('tag', harnessTagInput.value.trim());
+            const { resp, data } = await api(`/admin/harness/contracts?${params.toString()}`);
+            if (!resp.ok) {
+                harnessListOutput.textContent = `Harness contracts request failed (${resp.status})`;
+                return;
+            }
+
+            const items = data.items || [];
+            if (!items.length) {
+                harnessListOutput.textContent = 'No harness contracts matched the current filters.';
+                return;
+            }
+
+            harnessListOutput.innerHTML = items.map(item => `
+                <div class="card" style="margin-bottom:0.75rem;">
+                    <strong>${escapeHtml(item.goal || item.id)}</strong>
+                    <div class="muted">${escapeHtml(item.status || 'draft')} · risk ${escapeHtml(item.riskLevel || 'medium')} · approval ${escapeHtml(item.approvalRequired || 'none')}</div>
+                    <div class="muted">${escapeHtml(item.userRequestSummary || '')}</div>
+                    <div class="muted">Session: ${escapeHtml(item.sourceSessionId || 'none')} · Updated: ${escapeHtml(formatDateTime(item.updatedAtUtc || item.createdAtUtc))}</div>
+                    <div class="actions" style="margin-top:0.75rem;">
+                        <button data-harness-inspect="${encodeURIComponent(item.id)}">Inspect</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderHarnessBlock(label, values) {
+            const items = values || [];
+            if (!items.length) return '';
+            return `<h3>${escapeHtml(label)}</h3><pre>${escapeHtml(JSON.stringify(items, null, 2))}</pre>`;
+        }
+
+        function renderHarnessDetail(contract) {
+            harnessState.detail = contract;
+            if (!contract) {
+                harnessDetailOutput.innerHTML = '<div class="muted">Select a harness contract.</div>';
+                return;
+            }
+
+            harnessDetailOutput.innerHTML = `
+                <div class="stack">
+                    <div>
+                        <strong>${escapeHtml(contract.goal || contract.id)}</strong>
+                        <div class="muted">${escapeHtml(contract.status || 'draft')} · risk ${escapeHtml(contract.riskLevel || 'medium')} · approval ${escapeHtml(contract.approvalRequired || 'none')}</div>
+                        <div class="muted">Actor: ${escapeHtml(contract.actorId || 'unknown')} · Session: ${escapeHtml(contract.sourceSessionId || 'none')}</div>
+                        <div class="muted">Created: ${escapeHtml(formatDateTime(contract.createdAtUtc))} · Updated: ${escapeHtml(formatDateTime(contract.updatedAtUtc))}</div>
+                        <div class="muted">Approval reason: ${escapeHtml(contract.approvalReason || 'none')}</div>
+                    </div>
+                    ${renderHarnessBlock('Planned Actions', contract.plannedActions)}
+                    ${renderHarnessBlock('Read Set', contract.readSet)}
+                    ${renderHarnessBlock('Write Set', contract.writeSet)}
+                    ${renderHarnessBlock('Tools Required', contract.toolsRequired)}
+                    ${renderHarnessBlock('Verification Plan', contract.verificationPlan)}
+                    ${renderHarnessBlock('Rollback Plan', contract.rollbackPlan)}
+                    ${renderHarnessBlock('Assumptions', contract.assumptions)}
+                    ${renderHarnessBlock('Constraints', contract.constraints)}
+                    ${renderHarnessBlock('Success Criteria', contract.successCriteria)}
+                    <pre>${escapeHtml(JSON.stringify(contract, null, 2))}</pre>
+                </div>
+            `;
+        }
+
+        async function loadHarnessContractDetail(id) {
+            if (!id) return;
+            harnessState.selectedId = id;
+            const { resp, data } = await api(`/admin/harness/contracts/${encodeURIComponent(id)}`);
+            if (!resp.ok) {
+                harnessDetailOutput.innerHTML = `<div class="muted">Harness contract detail failed (${resp.status})</div>`;
+                return;
+            }
+
+            renderHarnessDetail(data.contract);
+        }
+
         async function loadDoctor() {
             const { resp, data } = await api('/doctor/text');
             doctorOutput.textContent = resp.ok ? data : `Doctor request failed (${resp.status})`;
@@ -5056,6 +5185,7 @@
                 loadAutomationTemplates(),
                 loadAutomations(),
                 loadLearningProposals(),
+                loadHarnessContracts(),
                 loadSettings(),
                 loadWhatsAppSetup(),
                 loadPairing(),
@@ -5155,6 +5285,14 @@
         [learningStatusInput, learningKindInput].forEach(input => {
             input.addEventListener('change', loadLearningProposals);
         });
+        document.getElementById('harness-refresh-button').addEventListener('click', loadHarnessContracts);
+        [harnessStatusInput, harnessRiskInput].forEach(input => {
+            input.addEventListener('change', loadHarnessContracts);
+        });
+        harnessTagInput.addEventListener('keydown', async (event) => {
+            if (event.key !== 'Enter') return;
+            await loadHarnessContracts();
+        });
         document.getElementById('memory-refresh-button').addEventListener('click', loadMemoryNotes);
         document.getElementById('memory-search-button').addEventListener('click', loadMemoryNotes);
         document.getElementById('memory-load-button').addEventListener('click', async () => {
@@ -5247,6 +5385,16 @@
             await loadApprovals();
             await loadApprovalHistory();
             showFlash(resp.ok ? `Approval ${approved ? 'granted' : 'denied'} for ${approvalId}.` : `Approval update failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+        });
+
+        harnessListOutput.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-harness-inspect]');
+            if (!button) return;
+
+            const encodedId = button.getAttribute('data-harness-inspect');
+            if (!encodedId) return;
+
+            await loadHarnessContractDetail(decodeURIComponent(encodedId));
         });
 
         memoryNotesOutput.addEventListener('click', async (event) => {

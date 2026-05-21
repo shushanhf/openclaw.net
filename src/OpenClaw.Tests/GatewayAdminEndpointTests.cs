@@ -164,6 +164,119 @@ public sealed class GatewayAdminEndpointTests
     }
 
     [Fact]
+    public async Task HarnessContracts_AdminApi_RequiresAuthAndSupportsCreateListDetailAndStatus()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+
+        var anonymousResponse = await harness.Client.GetAsync("/admin/harness/contracts");
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousResponse.StatusCode);
+
+        var operatorAccounts = harness.App.Services.GetRequiredService<OperatorAccountService>();
+        var viewer = operatorAccounts.Create(new OperatorAccountCreateRequest
+        {
+            Username = "harness-viewer",
+            Password = "viewer-pass",
+            Role = OperatorRoleNames.Viewer
+        });
+        var viewerToken = operatorAccounts.CreateToken(viewer.Id, new OperatorAccountTokenCreateRequest { Label = "viewer" });
+        Assert.NotNull(viewerToken);
+
+        using var viewerListRequest = new HttpRequestMessage(HttpMethod.Get, "/admin/harness/contracts");
+        viewerListRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", viewerToken!.Token);
+        var viewerListResponse = await harness.Client.SendAsync(viewerListRequest);
+        Assert.Equal(HttpStatusCode.OK, viewerListResponse.StatusCode);
+
+        using var viewerCreateRequest = new HttpRequestMessage(HttpMethod.Post, "/admin/harness/contracts")
+        {
+            Content = JsonContent("""{"goal":"viewer cannot create"}""")
+        };
+        viewerCreateRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", viewerToken.Token);
+        var viewerCreateResponse = await harness.Client.SendAsync(viewerCreateRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, viewerCreateResponse.StatusCode);
+
+        var (cookie, csrfToken) = await LoginAsync(harness.Client, harness.AuthToken);
+        var contractJson = JsonSerializer.Serialize(new HarnessContract
+        {
+            Id = "hctr_admin",
+            Goal = "Create a passive harness contract",
+            UserRequestSummary = "Admin test contract",
+            SourceSessionId = "session-harness",
+            ChannelId = "web",
+            SenderId = "operator",
+            PlannedActions =
+            [
+                new HarnessContractAction
+                {
+                    Id = "write",
+                    Title = "Write docs",
+                    ToolName = "file_write",
+                    ActionType = "write",
+                    WriteSet = [new HarnessContractResourceRef { Kind = HarnessContractResourceKinds.File, Path = "docs/HARNESS_CONTRACTS.md" }]
+                }
+            ],
+            VerificationPlan =
+            [
+                new HarnessContractVerificationStep
+                {
+                    Id = "test",
+                    Title = "Run tests",
+                    Kind = "command",
+                    Command = "dotnet test"
+                }
+            ]
+        }, CoreJsonContext.Default.HarnessContract);
+
+        using var missingCsrfRequest = new HttpRequestMessage(HttpMethod.Post, "/admin/harness/contracts")
+        {
+            Content = JsonContent(contractJson)
+        };
+        missingCsrfRequest.Headers.Add("Cookie", cookie);
+        var missingCsrfResponse = await harness.Client.SendAsync(missingCsrfRequest);
+        Assert.Equal(HttpStatusCode.Unauthorized, missingCsrfResponse.StatusCode);
+
+        using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/admin/harness/contracts")
+        {
+            Content = JsonContent(contractJson)
+        };
+        createRequest.Headers.Add("Cookie", cookie);
+        createRequest.Headers.Add(BrowserSessionAuthService.CsrfHeaderName, csrfToken);
+        var createResponse = await harness.Client.SendAsync(createRequest);
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+        using var createPayload = await ReadJsonAsync(createResponse);
+        Assert.True(createPayload.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal(HarnessContractRiskLevels.Medium, createPayload.RootElement.GetProperty("contract").GetProperty("riskLevel").GetString());
+
+        using var detailRequest = new HttpRequestMessage(HttpMethod.Get, "/admin/harness/contracts/hctr_admin");
+        detailRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var detailResponse = await harness.Client.SendAsync(detailRequest);
+        Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
+        using var detailPayload = await ReadJsonAsync(detailResponse);
+        Assert.Equal("hctr_admin", detailPayload.RootElement.GetProperty("contract").GetProperty("id").GetString());
+
+        using var listRequest = new HttpRequestMessage(HttpMethod.Get, "/admin/harness/contracts?status=draft&riskLevel=medium");
+        listRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var listResponse = await harness.Client.SendAsync(listRequest);
+        Assert.Equal(HttpStatusCode.OK, listResponse.StatusCode);
+        using var listPayload = await ReadJsonAsync(listResponse);
+        Assert.Single(listPayload.RootElement.GetProperty("items").EnumerateArray());
+
+        using var statusRequest = new HttpRequestMessage(HttpMethod.Post, "/admin/harness/contracts/hctr_admin/status")
+        {
+            Content = JsonContent("""{"status":"verified"}""")
+        };
+        statusRequest.Headers.Add("Cookie", cookie);
+        statusRequest.Headers.Add(BrowserSessionAuthService.CsrfHeaderName, csrfToken);
+        var statusResponse = await harness.Client.SendAsync(statusRequest);
+        Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
+        using var statusPayload = await ReadJsonAsync(statusResponse);
+        Assert.Equal(HarnessContractStatus.Verified, statusPayload.RootElement.GetProperty("contract").GetProperty("status").GetString());
+
+        var events = harness.Runtime.Operations.RuntimeEvents.Query(new RuntimeEventQuery { Component = "harness", Limit = 10 });
+        Assert.Contains(events, item => item.Action == "contract_created" && item.CorrelationId == "hctr_admin");
+        Assert.Contains(events, item => item.Action == "contract_status_changed" && item.CorrelationId == "hctr_admin");
+    }
+
+    [Fact]
     public async Task AuthOperatorToken_ExchangeAndRevocation_Work()
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
@@ -5108,6 +5221,9 @@ public sealed class GatewayAdminEndpointTests
             "/admin/automations/{id}/quarantine/clear",
             "/admin/learning/proposals",
             "/admin/learning/proposals/{id}",
+            "/admin/harness/contracts",
+            "/admin/harness/contracts/{id}",
+            "/admin/harness/contracts/{id}/status",
             "/admin/channels/auth",
             "/admin/channels/{channelId}/auth",
             "/admin/channels/{channelId}/auth/stream",

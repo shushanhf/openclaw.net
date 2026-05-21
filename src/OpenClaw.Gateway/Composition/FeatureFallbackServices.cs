@@ -56,6 +56,17 @@ internal static class FeatureFallbackServices
                services.GetService<IAutomationStore>() ?? fallbackFeatureStore,
                ResolveSessionSearchStore(services),
                NullLogger<LearningService>.Instance);
+
+    public static HarnessContractService ResolveHarnessContractService(
+        GatewayStartupContext startup,
+        IServiceProvider services)
+        => services.GetService<HarnessContractService>()
+           ?? new HarnessContractService(
+               services.GetService<IHarnessContractStore>()
+               ?? new FileHarnessContractStore(startup.Config.Memory.StoragePath),
+               services.GetService<RuntimeEventStore>()
+               ?? new RuntimeEventStore(startup.Config.Memory.StoragePath, NullLogger<RuntimeEventStore>.Instance),
+               NullLogger<HarnessContractService>.Instance);
 }
 
 internal sealed class EmptySessionSearchStore : ISessionSearchStore
