@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net;
 using System.Xml.Linq;
 using Microsoft.AspNetCore.Builder;
@@ -289,13 +290,28 @@ public sealed class DashboardStaticAssetTests
     [Fact]
     public void DashboardBuildOutput_IncludesCanonicalBlazorRuntimeAssets()
     {
-        var gatewayFrameworkPath = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..", "..", "..", "..",
-            "OpenClaw.Gateway", "bin", "Debug", "net10.0", "wwwroot", "dashboard", "_framework"));
+        var candidatePaths = new[]
+        {
+            Path.GetFullPath(Path.Combine(
+                AppContext.BaseDirectory,
+                "..", "..", "..", "..",
+                "OpenClaw.Gateway", "bin", "Release", "net10.0", "wwwroot", "dashboard", "_framework")),
+            Path.GetFullPath(Path.Combine(
+                AppContext.BaseDirectory,
+                "..", "..", "..", "..",
+                "OpenClaw.Gateway", "bin", "Debug", "net10.0", "wwwroot", "dashboard", "_framework"))
+        };
+        var gatewayFrameworkPath = candidatePaths.FirstOrDefault(Directory.Exists);
 
-        Assert.True(File.Exists(Path.Combine(gatewayFrameworkPath, "blazor.webassembly.js")));
-        Assert.True(File.Exists(Path.Combine(gatewayFrameworkPath, "dotnet.js")));
+        Assert.True(
+            gatewayFrameworkPath is not null,
+            $"Could not find dashboard framework output. Checked: {string.Join(", ", candidatePaths)}");
+        Assert.True(
+            File.Exists(Path.Combine(gatewayFrameworkPath, "blazor.webassembly.js")),
+            $"Missing blazor.webassembly.js in {gatewayFrameworkPath}");
+        Assert.True(
+            File.Exists(Path.Combine(gatewayFrameworkPath, "dotnet.js")),
+            $"Missing dotnet.js in {gatewayFrameworkPath}");
     }
 
     [Fact]
