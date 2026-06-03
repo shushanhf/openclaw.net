@@ -23,7 +23,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26.x"
+          go-version: "1.26.4"
           cache-dependency-path: src/whatsapp-whatsmeow-worker/go.sum
 
       - name: Check Go module tidiness
