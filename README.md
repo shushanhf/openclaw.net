@@ -206,6 +206,8 @@ The public documentation site is **[AgentQi.dev](https://agentqi.dev)**. The sou
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Providers, tools, skills, memory, channels, and day-to-day operation |
 | [docs/RELEASES.md](docs/RELEASES.md) | Desktop downloads, release assets, and signing status |
 | [docs/ARCHITECTURE_BOUNDARIES.md](docs/ARCHITECTURE_BOUNDARIES.md) | Core, gateway, extension, AOT/JIT, and Industrial Pack boundaries |
+| [docs/CAPABILITY_MATRIX.md](docs/CAPABILITY_MATRIX.md) | Core, optional, experimental, and JIT-only capability lanes |
+| [docs/build/dashboard-assets.md](docs/build/dashboard-assets.md) | Gateway Dashboard asset build and publish behavior |
 | [docs/TOOLS_GUIDE.md](docs/TOOLS_GUIDE.md) | Native tool catalog and configuration |
 | [docs/LOCAL_MODELS.md](docs/LOCAL_MODELS.md) | Embedded local models, frame-based video, and experimental LiteRT-LM adapter notes |
 | [docs/mempalace-memory.md](docs/mempalace-memory.md) | Optional MemPalace.NET memory provider and temporal knowledge graph |
@@ -213,7 +215,17 @@ The public documentation site is **[AgentQi.dev](https://agentqi.dev)**. The sou
 | [docs/MODEL_PROFILES.md](docs/MODEL_PROFILES.md) | Provider-agnostic named model profiles (including Gemma) |
 | [docs/deployment/TAILSCALE.md](docs/deployment/TAILSCALE.md) | Optional Tailscale Serve private access |
 | [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | Supported upstream skill, plugin, and channel surface |
+| [docs/zh-CN/START_HERE.md](docs/zh-CN/START_HERE.md) | Simplified Chinese first-run orientation |
 | [SECURITY.md](SECURITY.md) | Hardening guidance for public deployments |
+
+Capability lanes at a glance:
+
+| Lane | Examples |
+|-----|----------|
+| Core | Runtime loop, gateway, CLI, NativeAOT-friendly host path, OpenAI-compatible API |
+| Optional | MQTT protocol package, channels, Browser tool, model providers, workflow backends |
+| Experimental | Embedded local model sidecars and adapter-oriented package paths |
+| JIT-only | Dynamic plugin channels, commands, hooks, providers, and native dynamic .NET plugins |
 
 ## Contributing
 

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using OpenClaw.Agent.Tools;
 using OpenClaw.Core.Plugins;
+using OpenClaw.Protocols.Mqtt.Tools;
 using Xunit;
 
 namespace OpenClaw.Tests;
@@ -53,4 +54,3 @@ public sealed class HomeAutomationToolSchemaTests
         Assert.True(props.TryGetProperty("payload", out _));
     }
 }
-

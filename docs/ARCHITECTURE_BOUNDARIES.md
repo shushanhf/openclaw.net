@@ -41,6 +41,7 @@ Optional surfaces should be explicit, documented, and isolated from the core pat
 Examples include:
 
 - browser tools
+- protocol-specific packages such as MQTT
 - plugin bridge
 - channel adapters
 - model providers

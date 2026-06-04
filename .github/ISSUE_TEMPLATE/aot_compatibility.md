@@ -35,11 +35,19 @@ paste command here
 - PublishAot enabled: yes / no
 - Project or package affected:
 - Core surface or optional extension surface:
+- Dynamic/plugin-heavy surface involved: yes / no
+- Dashboard asset build skipped with `OpenClawSkipDashboardBuild=true`: yes / no
 
 ## Linker or trim warnings
 
 ```text
 paste warnings here
+```
+
+## Runtime error or startup diagnostic
+
+```text
+paste runtime error, startup diagnostic, or doctor output here
 ```
 
 ## Expected result
@@ -52,4 +60,4 @@ paste error output here
 
 ## Notes
 
-Please include whether this affects the default NativeAOT-friendly path or only an optional JIT/dynamic/plugin-heavy surface.
+Please include whether this affects the default NativeAOT-friendly path or only an optional protocol, provider, JIT, dynamic, or plugin-heavy surface.

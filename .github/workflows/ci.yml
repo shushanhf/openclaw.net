@@ -13,6 +13,12 @@ env:
   DOTNET_VERSION: "10.0.x"
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+  FAST_BUILD_PROPERTIES: "-p:OpenClawSkipDashboardBuild=true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   go-whatsapp-security:
@@ -50,6 +56,14 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('OpenClaw.Net.slnx', '**/*.csproj', '**/*.props', '**/*.targets') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
@@ -59,7 +73,7 @@ jobs:
         run: dotnet restore OpenClaw.Net.slnx
 
       - name: Build solution
-        run: dotnet build OpenClaw.Net.slnx --no-restore -c Release
+        run: dotnet build OpenClaw.Net.slnx --no-restore -c Release ${{ env.FAST_BUILD_PROPERTIES }}
 
       - name: Test standard targets
         run: dotnet test --no-build -c Release --verbosity normal --logger "trx;LogFileName=results.trx" src/OpenClaw.Tests
@@ -71,7 +85,7 @@ jobs:
         run: dotnet restore OpenClaw.Net.slnx -p:OpenClawEnableOpenSandbox=true
 
       - name: Build sandbox-enabled solution
-        run: dotnet build OpenClaw.Net.slnx --no-restore -c Release -p:OpenClawEnableOpenSandbox=true
+        run: dotnet build OpenClaw.Net.slnx --no-restore -c Release -p:OpenClawEnableOpenSandbox=true ${{ env.FAST_BUILD_PROPERTIES }}
 
       - name: Test sandbox-enabled targets
         run: dotnet test --no-build -c Release -p:OpenClawEnableOpenSandbox=true --verbosity normal --logger "trx;LogFileName=results-sandbox.trx" src/OpenClaw.Tests
@@ -94,6 +108,14 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('OpenClaw.Net.slnx', '**/*.csproj', '**/*.props', '**/*.targets') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
 
       - name: Ensure AOT prerequisites
         timeout-minutes: 8
@@ -136,6 +158,14 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('OpenClaw.Net.slnx', '**/*.csproj', '**/*.props', '**/*.targets') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
 
       - name: Configure macOS Swift library path
         shell: bash
@@ -201,6 +231,14 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('OpenClaw.Net.slnx', '**/*.csproj', '**/*.props', '**/*.targets') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
 
       - name: Publish and smoke-test JIT binaries
         run: |
@@ -268,6 +306,14 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('OpenClaw.Net.slnx', '**/*.csproj', '**/*.props', '**/*.targets') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
@@ -277,7 +323,7 @@ jobs:
         run: dotnet restore src/OpenClaw.Tests
 
       - name: Build
-        run: dotnet build --no-restore -c Release src/OpenClaw.Tests
+        run: dotnet build --no-restore -c Release src/OpenClaw.Tests ${{ env.FAST_BUILD_PROPERTIES }}
 
       - name: Run Public Compatibility Smoke
         run: dotnet test --no-build -c Release --filter "Category=PublicSmoke" --verbosity normal --logger "trx;LogFileName=public-smoke.trx" src/OpenClaw.Tests

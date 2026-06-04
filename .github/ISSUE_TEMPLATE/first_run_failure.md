@@ -22,8 +22,19 @@ assignees: ""
 - OS:
 - Architecture:
 - .NET SDK version:
+- Node.js version, if a dashboard or plugin step failed:
 - Shell/terminal:
 - Commit SHA:
+
+## Runtime path
+
+- [ ] `samples/OpenClaw.HelloAgent`
+- [ ] `openclaw setup`
+- [ ] `openclaw start`
+- [ ] Direct Gateway run
+- [ ] Desktop Companion
+- [ ] Dashboard asset build
+- [ ] Optional plugin/extension path
 
 ## Command run
 

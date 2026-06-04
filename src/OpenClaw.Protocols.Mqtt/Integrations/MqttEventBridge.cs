@@ -4,12 +4,12 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using MQTTnet;
 using MQTTnet.Protocol;
-using OpenClaw.Agent.Tools;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
 using OpenClaw.Core.Security;
+using OpenClaw.Protocols.Mqtt.Tools;
 
-namespace OpenClaw.Agent.Integrations;
+namespace OpenClaw.Protocols.Mqtt.Integrations;
 
 public sealed class MqttEventBridge : BackgroundService
 {

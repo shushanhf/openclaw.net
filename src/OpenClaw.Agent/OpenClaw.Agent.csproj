@@ -13,7 +13,6 @@
     <ProjectReference Include="..\OpenClaw.PluginKit\OpenClaw.PluginKit.csproj" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.3.0" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.3.0" />
-    <PackageReference Include="MQTTnet" Version="5.1.0.1559" />
     <PackageReference Include="ModelContextProtocol" Version="1.1.0" />
   </ItemGroup>
   <ItemGroup>

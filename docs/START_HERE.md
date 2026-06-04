@@ -99,7 +99,7 @@ OpenClaw.NET supports practical OpenClaw ecosystem reuse:
 - mainstream `api.registerTool()` and `api.registerService()` plugin surfaces
 - explicit diagnostics for unsupported plugin APIs
 
-OpenClaw.NET is not a full upstream OpenClaw clone. Unsupported or JIT-only surfaces fail fast instead of loading partially. See [COMPATIBILITY.md](COMPATIBILITY.md) for the canonical matrix.
+OpenClaw.NET is not a full upstream OpenClaw clone. Unsupported or JIT-only surfaces fail fast instead of loading partially. See [COMPATIBILITY.md](COMPATIBILITY.md) for the canonical compatibility guide and [CAPABILITY_MATRIX.md](CAPABILITY_MATRIX.md) for the compact core, optional, experimental, and JIT-only lane summary.
 
 ## Known Limitations
 
@@ -116,6 +116,7 @@ OpenClaw.NET is not a full upstream OpenClaw clone. Unsupported or JIT-only surf
 | --- | --- |
 | Run a real local gateway | [QUICKSTART.md](QUICKSTART.md) |
 | Understand repository shape | [GETTING_STARTED.md](GETTING_STARTED.md) |
+| Check capability lanes | [CAPABILITY_MATRIX.md](CAPABILITY_MATRIX.md) |
 | Check compatibility | [COMPATIBILITY.md](COMPATIBILITY.md) |
 | Use tools and skills | [USER_GUIDE.md](USER_GUIDE.md) and [TOOLS_GUIDE.md](TOOLS_GUIDE.md) |
 | Download desktop bundles | [RELEASES.md](RELEASES.md) |

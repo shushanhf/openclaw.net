@@ -57,12 +57,6 @@ public sealed class NativePluginRegistry : IDisposable
             RegisterTool(new HomeAssistantWriteTool(config.HomeAssistant, null, toolingConfig), "home-assistant");
         }
 
-        if (config.Mqtt.Enabled)
-        {
-            RegisterTool(new MqttTool(config.Mqtt), "mqtt");
-            RegisterTool(new MqttPublishTool(config.Mqtt, toolingConfig), "mqtt");
-        }
-
         if (config.Notion.Enabled)
         {
             RegisterTool(new NotionTool(config.Notion), "notion");

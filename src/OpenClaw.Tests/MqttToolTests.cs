@@ -1,5 +1,5 @@
-using OpenClaw.Agent.Tools;
 using OpenClaw.Core.Plugins;
+using OpenClaw.Protocols.Mqtt.Tools;
 using Xunit;
 
 namespace OpenClaw.Tests;
@@ -36,4 +36,3 @@ public sealed class MqttToolTests
         Assert.Contains("hello", result);
     }
 }
-

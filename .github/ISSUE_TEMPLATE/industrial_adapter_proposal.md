@@ -19,6 +19,15 @@ What manufacturing, edge monitoring, operations, or industrial workflow should t
 - [ ] PLC-specific
 - [ ] Other
 
+## Deployment shape
+
+- [ ] Local loopback
+- [ ] Edge device
+- [ ] Factory network
+- [ ] Cloud gateway
+- [ ] Hybrid edge/cloud
+- [ ] Simulation or sample only
+
 ## Reuse boundary
 
 - [ ] Reusable infrastructure
@@ -32,6 +41,10 @@ If this is product/customer-specific, describe what should stay downstream inste
 ## Vendor neutrality
 
 Does this introduce a vendor-specific default, proprietary dependency, or customer-specific workflow?
+
+## Safety and security considerations
+
+Does this touch machine control, safety-critical signals, privileged network zones, credentials, or regulated operational data?
 
 ## Proposed shape
 

@@ -26,6 +26,7 @@ Use this map when turning the Markdown docs into a documentation website. It kee
 | Guides | Shared Harness State | [SHARED_HARNESS_STATE.md](SHARED_HARNESS_STATE.md) |
 | Guides | Codebase Harness Map | [CODEBASE_HARNESS_MAP.md](CODEBASE_HARNESS_MAP.md) |
 | Reference | Compatibility | [COMPATIBILITY.md](COMPATIBILITY.md) |
+| Reference | Capability Matrix | [CAPABILITY_MATRIX.md](CAPABILITY_MATRIX.md) |
 | Reference | Architecture Boundaries | [ARCHITECTURE_BOUNDARIES.md](ARCHITECTURE_BOUNDARIES.md) |
 | Reference | Sessions | [SESSIONS.md](SESSIONS.md) |
 | Reference | Canvas and A2UI | [CANVAS_A2UI.md](CANVAS_A2UI.md) |
@@ -43,6 +44,7 @@ Use this map when turning the Markdown docs into a documentation website. It kee
 | Operations | Tool Governance Sidecar | [governance/sidecar-pattern.md](governance/sidecar-pattern.md) |
 | Operations | Microsoft Agent Governance | [governance/microsoft-agent-governance.md](governance/microsoft-agent-governance.md) |
 | Operations | Releases | [RELEASES.md](RELEASES.md) |
+| Operations | Dashboard Asset Build | [build/dashboard-assets.md](build/dashboard-assets.md) |
 | Operations | Docker Hub | [DOCKERHUB.md](DOCKERHUB.md) |
 | Operations | Optional Sandboxing | [sandboxing.md](sandboxing.md) |
 | Project | Contributing | [CONTRIBUTING.md](../CONTRIBUTING.md) |
@@ -51,9 +53,11 @@ Use this map when turning the Markdown docs into a documentation website. It kee
 | Project | Sponsors | [project/sponsors.md](project/sponsors.md) |
 | Project | Branch Protection | [project/branch-protection.md](project/branch-protection.md) |
 | Project | Maintainer Review Checklist | [maintainers/review-checklist.md](maintainers/review-checklist.md) |
+| Project | Optional Dependency Split | [architecture/optional-dependency-split.md](architecture/optional-dependency-split.md) |
 | Project | Industrial Pack Preview Proposal | [proposals/industrial-pack-preview.md](proposals/industrial-pack-preview.md) |
 | Project | Roadmap | [ROADMAP.md](ROADMAP.md) |
 | Project | AI Contributor Guide | [ai-contributor-guide.md](ai-contributor-guide.md) |
+| International | Simplified Chinese Start Here | [zh-CN/START_HERE.md](zh-CN/START_HERE.md) |
 
 ## Suggested Landing Path
 
@@ -91,6 +95,7 @@ Guides
 
 Reference
   Compatibility
+  Capability Matrix
   Architecture Boundaries
   Sessions
   Canvas and A2UI
@@ -112,6 +117,7 @@ Operations
   Tool Governance Sidecar
   Microsoft Agent Governance
   Releases
+  Dashboard Asset Build
   Docker Hub
   Optional Sandboxing
 
@@ -122,9 +128,13 @@ Project
   Sponsors
   Branch Protection
   Maintainer Review Checklist
+  Optional Dependency Split
   Industrial Pack Preview Proposal
   Roadmap
   AI Contributor Guide
+
+International
+  Simplified Chinese Start Here
 ```
 
 ## Build Notes

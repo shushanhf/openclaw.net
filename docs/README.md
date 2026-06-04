@@ -13,6 +13,8 @@ Use this page as the map. If you are unsure where to go next, the groups below a
 | [GLOSSARY.md](GLOSSARY.md) | A term in another doc is unfamiliar — *gateway*, *runtime*, *skill*, *plugin*, *profile*, *posture*, `aot` / `jit` / `auto`, etc. |
 | [../README.md](../README.md) | High-level overview, feature list, and headline capabilities. |
 | [ARCHITECTURE_BOUNDARIES.md](ARCHITECTURE_BOUNDARIES.md) | Core, gateway, extension, AOT/JIT, and Industrial Pack boundaries. |
+| [CAPABILITY_MATRIX.md](CAPABILITY_MATRIX.md) | Core, optional, experimental, and JIT-only capability lanes. |
+| [zh-CN/START_HERE.md](zh-CN/START_HERE.md) | Simplified Chinese first-run orientation. |
 
 ## Using It
 
@@ -78,6 +80,7 @@ Use this page as the map. If you are unsure where to go next, the groups below a
 | [COMPATIBILITY.md](COMPATIBILITY.md) | Supported upstream skill, plugin, and channel surface. |
 | [sandboxing.md](sandboxing.md) | Optional sandbox execution backends. |
 | [DOCKERHUB.md](DOCKERHUB.md) | Official container image reference. |
+| [build/dashboard-assets.md](build/dashboard-assets.md) | Gateway Dashboard asset build and publish behavior. |
 | [deployment/TAILSCALE.md](deployment/TAILSCALE.md) | Tailscale Serve/Funnel patterns and private runtime access security notes. |
 | [PRODUCTION_FIXES.md](PRODUCTION_FIXES.md) | Known production-readiness fixes and their verification. |
 
@@ -93,6 +96,7 @@ Use this page as the map. If you are unsure where to go next, the groups below a
 | [maintainers/review-checklist.md](maintainers/review-checklist.md) | Maintainer checklist for runtime, gateway, extension, industrial, documentation, security, AOT, and commercial review. |
 | [ai-contributor-guide.md](ai-contributor-guide.md) | Guidance for AI-assisted contribution workflows. |
 | [architecture-startup-refactor.md](architecture-startup-refactor.md) | Current gateway startup layout and composition seams. |
+| [architecture/optional-dependency-split.md](architecture/optional-dependency-split.md) | Optional dependency split guidance and follow-up seams. |
 | [proposals/industrial-pack-preview.md](proposals/industrial-pack-preview.md) | Proposal for a reusable, vendor-neutral Industrial Pack preview. |
 | [ROADMAP.md](ROADMAP.md) | Planned direction and priorities. |
 

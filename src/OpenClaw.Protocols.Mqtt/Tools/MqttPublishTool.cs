@@ -7,7 +7,7 @@ using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
 using OpenClaw.Core.Security;
 
-namespace OpenClaw.Agent.Tools;
+namespace OpenClaw.Protocols.Mqtt.Tools;
 
 public sealed class MqttPublishTool : ITool
 {

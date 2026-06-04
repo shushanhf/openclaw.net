@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace OpenClaw.Agent.Tools;
+namespace OpenClaw.Protocols.Mqtt.Tools;
 
 internal static class MqttMessageCache
 {

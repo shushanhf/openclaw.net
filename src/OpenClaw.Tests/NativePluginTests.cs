@@ -2,6 +2,7 @@ using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Plugins;
 using OpenClaw.Agent.Plugins;
 using OpenClaw.Agent.Tools;
+using OpenClaw.Protocols.Mqtt.Tools;
 using Xunit;
 
 namespace OpenClaw.Tests;
@@ -52,7 +53,7 @@ public class NativePluginRegistryTests
     }
 
     [Fact]
-    public void Constructor_MqttEnabled_RegistersReadAndWriteTools()
+    public void RegisterExternalTool_MqttEnabled_RegistersReadAndWriteTools()
     {
         var config = new NativePluginsConfig
         {
@@ -64,6 +65,8 @@ public class NativePluginRegistryTests
         };
 
         var registry = new NativePluginRegistry(config, NullLogger.Instance);
+        registry.RegisterExternalTool(new MqttTool(config.Mqtt), "mqtt");
+        registry.RegisterExternalTool(new MqttPublishTool(config.Mqtt), "mqtt");
 
         Assert.Contains(registry.Tools, t => t.Name == "mqtt");
         Assert.Contains(registry.Tools, t => t.Name == "mqtt_publish");

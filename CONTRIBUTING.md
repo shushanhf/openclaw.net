@@ -2,7 +2,7 @@
 
 Thank you for your interest in contributing! This guide covers the contributor workflow. For the project shape, repository map, and how the runtime fits together, start with [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md). If you are evaluating the project for the first time, read [docs/START_HERE.md](docs/START_HERE.md). For a first local run, follow [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
-For project governance, maintainer roles, sponsorship boundaries, branch protection, and architecture scope, see [docs/project/governance.md](docs/project/governance.md), [docs/project/maintainers.md](docs/project/maintainers.md), [docs/project/sponsors.md](docs/project/sponsors.md), [docs/project/branch-protection.md](docs/project/branch-protection.md), and [docs/ARCHITECTURE_BOUNDARIES.md](docs/ARCHITECTURE_BOUNDARIES.md).
+For project governance, maintainer roles, sponsorship boundaries, branch protection, and architecture scope, see [docs/project/governance.md](docs/project/governance.md), [docs/project/maintainers.md](docs/project/maintainers.md), [docs/project/sponsors.md](docs/project/sponsors.md), [docs/project/branch-protection.md](docs/project/branch-protection.md), [docs/ARCHITECTURE_BOUNDARIES.md](docs/ARCHITECTURE_BOUNDARIES.md), [docs/CAPABILITY_MATRIX.md](docs/CAPABILITY_MATRIX.md), and [docs/architecture/optional-dependency-split.md](docs/architecture/optional-dependency-split.md).
 
 ## Prerequisites
 
@@ -56,6 +56,7 @@ dotnet run --project samples/OpenClaw.HelloAgent -c Release --no-build
 - Small CLI/help-text improvements that make failures more actionable.
 - Compatibility catalog additions that exercise a real upstream package or intentionally unsupported case.
 - Sample improvements that demonstrate existing behavior without adding new runtime architecture.
+- Optional protocol or provider work that follows the split guidance in [docs/architecture/optional-dependency-split.md](docs/architecture/optional-dependency-split.md).
 
 ## Pull Request Review
 
@@ -71,7 +72,7 @@ Maintainers use the scoped review guidance in [docs/maintainers/review-checklist
 
 ## Adding a New Tool or LLM Provider
 
-Tools implement `ITool` in `src/OpenClaw.Agent/Tools/` and register their JSON types in `CoreJsonContext`. Providers plug in through `Microsoft.Extensions.AI` and the gateway composition pipeline — add through the active provider registration path, not a `Program.cs` factory. Both must be wired through the current composition seams (see [docs/architecture-startup-refactor.md](docs/architecture-startup-refactor.md)) and covered by tests in `src/OpenClaw.Tests/`.
+Tools implement `ITool` in `src/OpenClaw.Agent/Tools/` when they are part of the default agent surface. Protocol-specific optional tools should live in an optional project, as MQTT does in `src/OpenClaw.Protocols.Mqtt`, and be composed through the gateway or another explicit extension seam. Providers plug in through `Microsoft.Extensions.AI` and the gateway composition pipeline — add through the active provider registration path, not a `Program.cs` factory. Both must be wired through the current composition seams (see [docs/architecture-startup-refactor.md](docs/architecture-startup-refactor.md)) and covered by tests in `src/OpenClaw.Tests/`.
 
 ## Reporting Bugs and Feature Requests
 
