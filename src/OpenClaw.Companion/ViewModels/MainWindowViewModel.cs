@@ -161,7 +161,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             ApprovalDesktopNotificationsEnabled = ApprovalDesktopNotificationsEnabled,
             ApprovalDesktopNotificationsOnlyWhenUnfocused = ApprovalDesktopNotificationsOnlyWhenUnfocused,
             AutoStartLocalGateway = AutoStartLocalGateway,
-            SetupProvider = SetupProvider,
+            SetupProvider = NormalizeSetupProvider(SetupProvider),
             SetupModel = SetupModel,
             SetupModelPreset = SetupModelPreset,
             SetupWorkspacePath = SetupWorkspacePath,
@@ -181,6 +181,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!string.IsNullOrWhiteSpace(authToken))
             AuthToken = authToken;
     }
+
+    private static string NormalizeSetupProvider(string? provider)
+        => string.IsNullOrWhiteSpace(provider) ? "openai" : provider.Trim();
 
     private static string ConvertBaseUrlToWebSocketUrl(string baseUrl)
         => ManagedGatewayService.BuildWebSocketUrl(baseUrl);

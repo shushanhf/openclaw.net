@@ -1,5 +1,7 @@
+using System.Text.Json;
 using OpenClaw.Companion.Models;
 using OpenClaw.Companion.Services;
+using OpenClaw.Companion.ViewModels;
 using Xunit;
 
 namespace OpenClaw.Tests;
@@ -170,6 +172,32 @@ public sealed class CompanionSettingsStoreTests
             Assert.True(File.Exists(Path.Join(providerStoreDir, "stored.marker")));
             Assert.Equal("provider-secret", store.LoadProviderApiKey(allowPlaintextFallback: true));
             Assert.Equal("provider-secret", File.ReadAllText(Path.Join(providerStoreDir, "token.txt")));
+        }
+        finally
+        {
+            Directory.Delete(baseDir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void MainWindowViewModel_SaveSettings_NormalizesBlankSetupProvider(string? setupProvider)
+    {
+        var baseDir = CreateTempDir();
+        try
+        {
+            var store = new SettingsStore(baseDir);
+            var viewModel = new MainWindowViewModel(store, new GatewayWebSocketClient());
+
+            viewModel.SetupProvider = setupProvider;
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(store.SettingsPath));
+            Assert.Equal("openai", doc.RootElement.GetProperty("setupProvider").GetString());
+
+            var reloaded = new MainWindowViewModel(store, new GatewayWebSocketClient());
+            Assert.Equal("openai", reloaded.SetupProvider);
         }
         finally
         {
