@@ -361,7 +361,11 @@ public sealed class OnnxTurnRoutingPolicy : ITurnRoutingPolicy, IDisposable
             result = Math.Max(result, 2);
         if (signals.Debug && signals.LongContext)
             result = Math.Max(result, 2);
+        if ((signals.Research && signals.Planning) || (signals.RepoArch && signals.Planning))
+            result = Math.Max(result, 3);
         if (signals.RepoArch)
+            result = Math.Max(result, 1);
+        if (signals.Planning)
             result = Math.Max(result, 1);
         return result;
     }

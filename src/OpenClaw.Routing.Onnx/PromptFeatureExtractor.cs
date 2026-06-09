@@ -23,7 +23,7 @@ internal static partial class PromptFeatureExtractor
     private static readonly string[] CompareKeywords = ["对比", "compare", "audit", "审计", "review", "评估"];
     private static readonly string[] PlanningKeywords = ["plan", "planning", "方案", "计划", "roadmap", "milestone", "步骤", "实施"];
     private static readonly string[] StrictFormatKeywords = ["json", "yaml", "csv", "schema", "只返回", "不要解释", "按格式", "only return", "no explanation"];
-    private static readonly string[] HighRiskKeywords = ["deploy", "rollback", "migration", "delete", "overwrite", "production", "生产", "部署", "删除", "客户", "法务", "财务"];
+    private static readonly string[] HighRiskKeywords = ["deploy", "rollback", "migration", "delete", "overwrite", "覆盖", "production", "生产", "部署", "删除", "客户", "法务", "财务"];
     private static readonly string[] ProductionKeywords = ["production", "生产", "prod", "线上", "正式环境"];
     private static readonly string[] CustomerKeywords = ["customer", "客户", "用户邮件", "client"];
     private static readonly string[] DeleteKeywords = ["delete", "remove", "drop", "truncate", "删除", "清空", "覆盖", "overwrite"];
@@ -60,10 +60,12 @@ internal static partial class PromptFeatureExtractor
         var longContext = text.Length >= 6000 || CodeBlockRegex().Matches(text).Sum(static match => match.Length) >= 1500 || FilePathRegex().Matches(text).Count >= 2;
         var debug = KeywordCount(text, DebugKeywords) > 0 || TracebackRegex().IsMatch(text);
         var repoArch = KeywordCount(text, ArchitectureKeywords) > 0 || KeywordCount(text, CompareKeywords) > 0;
-        var highRisk = KeywordCount(text, HighRiskKeywords) > 0 || (KeywordCount(text, ProductionKeywords) > 0 && KeywordCount(text, DeleteKeywords) > 0) || KeywordCount(text, CustomerKeywords) > 0;
+        var highRisk = KeywordCount(text, HighRiskKeywords) > 0 || (KeywordCount(text, ProductionKeywords) > 0 && KeywordCount(text, DeleteKeywords) > 0) || KeywordCount(text, CustomerKeywords) > 0 || (KeywordCount(text, ProductionKeywords) > 0 && debug);
         var strictFormat = KeywordCount(text, StrictFormatKeywords) > 0 || KeywordCount(text, ConstraintKeywords) > 1;
         var deepConversation = turnIndex >= 4;
-        return new RoutingSignals(debug, repoArch, highRisk, longContext, strictFormat, hasCodeBlock, hasFileReference, hasUrl, deepConversation);
+        var research = KeywordCount(text, ResearchKeywords) > 0;
+        var planning = KeywordCount(text, PlanningKeywords) > 0;
+        return new RoutingSignals(debug, repoArch, highRisk, longContext, strictFormat, hasCodeBlock, hasFileReference, hasUrl, deepConversation, research, planning);
     }
 
     private static void CopyEmbeddingSegment(ReadOnlySpan<float> source, Span<float> destination)
@@ -96,4 +98,6 @@ internal readonly record struct RoutingSignals(
     bool HasCodeBlock,
     bool HasFileReference,
     bool HasUrl,
-    bool DeepConversation);
+    bool DeepConversation,
+    bool Research,
+    bool Planning);
