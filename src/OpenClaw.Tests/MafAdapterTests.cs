@@ -241,10 +241,12 @@ public sealed class MafAdapterTests
 
             await foreach (var _ in runtime.RunStreamingAsync(session, "first turn", CancellationToken.None))
             {
+                // Intentionally drain the stream to completion; assertions are on side effects/logs.
             }
 
             await foreach (var _ in runtime.RunStreamingAsync(session, "follow-up turn", CancellationToken.None))
             {
+                // Intentionally drain the stream to completion; assertions are on side effects/logs.
             }
 
             Assert.Contains(logs, message => message.Contains("Restored MAF session sidecar", StringComparison.Ordinal));
