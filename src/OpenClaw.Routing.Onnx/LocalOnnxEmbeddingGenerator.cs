@@ -181,7 +181,7 @@ public sealed class LocalOnnxEmbeddingGenerator : ILocalEmbeddingGenerator, IDis
                 throw new InvalidOperationException($"Tokenizer file '{tokenizerPath}' does not specify a model type under 'model.type'.");
             var modelType = typeElement.GetString();
 
-            var tempDir = Path.Combine(Path.GetTempPath(), "openclaw-routing-tokenizers", Guid.NewGuid().ToString("N"));
+            var tempDir = Path.Join(Path.GetTempPath(), "openclaw-routing-tokenizers", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempDir);
 
             try
@@ -202,8 +202,8 @@ public sealed class LocalOnnxEmbeddingGenerator : ILocalEmbeddingGenerator, IDis
 
         private static (Tokenizer Tokenizer, string WorkingDirectory) LoadBpe(JsonElement root, JsonElement modelElement, string tempDir)
         {
-            var vocabPath = Path.Combine(tempDir, "vocab.json");
-            var mergesPath = Path.Combine(tempDir, "merges.txt");
+            var vocabPath = Path.Join(tempDir, "vocab.json");
+            var mergesPath = Path.Join(tempDir, "merges.txt");
 
             if (!modelElement.TryGetProperty("vocab", out var vocabElement))
                 throw new InvalidOperationException("BPE tokenizer model is missing the required 'vocab' field.");
@@ -248,7 +248,7 @@ public sealed class LocalOnnxEmbeddingGenerator : ILocalEmbeddingGenerator, IDis
 
         private static (Tokenizer Tokenizer, string WorkingDirectory) LoadWordPiece(JsonElement modelElement, string tempDir)
         {
-            var vocabPath = Path.Combine(tempDir, "vocab.txt");
+            var vocabPath = Path.Join(tempDir, "vocab.txt");
             if (!modelElement.TryGetProperty("vocab", out var vocabElement))
                 throw new InvalidOperationException("WordPiece tokenizer model is missing the required 'vocab' field.");
 
@@ -267,12 +267,12 @@ public sealed class LocalOnnxEmbeddingGenerator : ILocalEmbeddingGenerator, IDis
             if (vocabElement.ValueKind != JsonValueKind.Object)
                 throw new InvalidOperationException("WordPiece tokenizer 'vocab' must be a JSON object mapping token to id.");
 
-            var pairs = new List<(string Token, int Id)>();
-            foreach (var property in vocabElement.EnumerateObject().Where(static property => property.Value.ValueKind == JsonValueKind.Number))
-            {
-                if (property.Value.TryGetInt32(out var id) && id >= 0)
-                    pairs.Add((property.Name, id));
-            }
+            var pairs = vocabElement
+                .EnumerateObject()
+                .Select(static property => TryReadWordPieceTokenId(property))
+                .Where(static pair => pair.HasValue)
+                .Select(static pair => pair!.Value)
+                .ToList();
 
             if (pairs.Count == 0)
                 throw new InvalidOperationException("WordPiece tokenizer vocab does not contain any valid token-id entries.");
@@ -286,6 +286,14 @@ public sealed class LocalOnnxEmbeddingGenerator : ILocalEmbeddingGenerator, IDis
             }
 
             File.WriteAllLines(vocabPath, tokens);
+        }
+
+        private static (string Token, int Id)? TryReadWordPieceTokenId(JsonProperty property)
+        {
+            if (property.Value.ValueKind != JsonValueKind.Number || !property.Value.TryGetInt32(out var id) || id < 0)
+                return null;
+
+            return (property.Name, id);
         }
 
         private static Dictionary<string, int> ExtractSpecialTokens(JsonElement root)
@@ -426,7 +434,10 @@ internal sealed class OnnxEmbeddingModelRunner : IEmbeddingModelRunner
         }
 
         // Second pass: fall back to mean-pooling over a rank-3 hidden-state tensor.
-        foreach (var result in results)
+        foreach (var result in results.Where(static result =>
+            result.Value is Tensor<float> tensor &&
+            tensor.Rank == 3 &&
+            tensor.Dimensions[0] == 1))
         {
             if (TryGetPooledEmbedding(result, attentionMask, out var pooledEmbedding))
                 return pooledEmbedding;

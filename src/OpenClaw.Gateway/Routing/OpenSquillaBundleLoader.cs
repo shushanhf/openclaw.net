@@ -67,9 +67,10 @@ internal sealed class OpenSquillaBundleLoader : IOpenSquillaBundleLoader
         if (string.IsNullOrWhiteSpace(path))
             return "";
 
-        return Path.GetFullPath(Path.IsPathRooted(path)
-            ? path
-            : Path.Combine(bundlePath, path));
+        if (Path.IsPathRooted(path))
+            return Path.GetFullPath(path);
+
+        return Path.GetFullPath(Path.Join(bundlePath, path));
     }
 
     private static string? TryFindString(JsonElement element, params string[] propertyNames)
