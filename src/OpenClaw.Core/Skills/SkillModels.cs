@@ -180,6 +180,42 @@ public sealed class MetaSkillStepDefinition
 
     /// <summary>Optional upstream step dependencies.</summary>
     public IReadOnlyList<string> DependsOn { get; init; } = [];
+
+    /// <summary>Optional substitute step to execute when this step fails.</summary>
+    public string? OnFailure { get; init; }
+
+    /// <summary>Optional step-local timeout in seconds.</summary>
+    public int? TimeoutSeconds { get; init; }
+
+    /// <summary>Step-local retry policy. Defaults to one attempt and no backoff.</summary>
+    public MetaStepRetryPolicy Retry { get; init; } = new();
+
+    /// <summary>Optional contract for validating this step's intermediate output.</summary>
+    public MetaStepOutputContract OutputContract { get; init; } = new();
+}
+
+/// <summary>
+/// Retry policy for a single meta-skill step.
+/// </summary>
+public sealed class MetaStepRetryPolicy
+{
+    /// <summary>Total attempts, including the initial try.</summary>
+    public int MaxAttempts { get; init; } = 1;
+
+    /// <summary>Delay before retry attempts, in milliseconds.</summary>
+    public int BackoffMs { get; init; }
+}
+
+/// <summary>
+/// Contract for validating one meta-skill step's output before dependents run.
+/// </summary>
+public sealed class MetaStepOutputContract
+{
+    /// <summary>Expected format. Supported values: text, json.</summary>
+    public string Format { get; init; } = "text";
+
+    /// <summary>Required top-level properties when <see cref="Format"/> is json.</summary>
+    public IReadOnlyList<string> RequiredProperties { get; init; } = [];
 }
 
 /// <summary>

@@ -628,6 +628,18 @@ public static class SkillLoader
                     withJson = withElement.GetRawText();
                 }
 
+                if (!TryParseOnFailure(stepElement, out var onFailure, out errorCode))
+                    return null;
+
+                if (!TryParseTimeoutSeconds(stepElement, out var timeoutSeconds, out errorCode))
+                    return null;
+
+                if (!TryParseRetryPolicy(stepElement, out var retry, out errorCode))
+                    return null;
+
+                if (!TryParseOutputContract(stepElement, out var outputContract, out errorCode))
+                    return null;
+
                 steps.Add(new MetaSkillStepDefinition
                 {
                     Id = idElement.GetString()!,
@@ -635,7 +647,11 @@ public static class SkillLoader
                     Skill = skill,
                     Tool = tool,
                     WithJson = withJson,
-                    DependsOn = dependsOn
+                    DependsOn = dependsOn,
+                    OnFailure = onFailure,
+                    TimeoutSeconds = timeoutSeconds,
+                    Retry = retry,
+                    OutputContract = outputContract
                 });
             }
 
@@ -769,6 +785,231 @@ public static class SkillLoader
         {
             errorCode = "dependency_cycle";
             return false;
+        }
+
+        if (!ValidateFailureBranches(steps, ids, out errorCode))
+            return false;
+
+        return true;
+    }
+
+    private static bool TryParseOnFailure(JsonElement stepElement, out string? onFailure, out string? errorCode)
+    {
+        onFailure = null;
+        errorCode = null;
+
+        if (!stepElement.TryGetProperty("on_failure", out var onFailureElement) ||
+            onFailureElement.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (onFailureElement.ValueKind != JsonValueKind.String)
+        {
+            errorCode = "invalid_on_failure";
+            return false;
+        }
+
+        var value = onFailureElement.GetString();
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+
+        onFailure = value.Trim();
+        return true;
+    }
+
+    private static bool TryParseTimeoutSeconds(JsonElement stepElement, out int? timeoutSeconds, out string? errorCode)
+    {
+        timeoutSeconds = null;
+        errorCode = null;
+
+        if (!stepElement.TryGetProperty("timeout_seconds", out var timeoutElement) ||
+            timeoutElement.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (timeoutElement.ValueKind != JsonValueKind.Number || !timeoutElement.TryGetInt32(out var parsed) || parsed <= 0)
+        {
+            errorCode = "invalid_step_timeout";
+            return false;
+        }
+
+        timeoutSeconds = parsed;
+        return true;
+    }
+
+    private static bool TryParseRetryPolicy(JsonElement stepElement, out MetaStepRetryPolicy retry, out string? errorCode)
+    {
+        retry = new MetaStepRetryPolicy();
+        errorCode = null;
+
+        if (!stepElement.TryGetProperty("retry", out var retryElement) ||
+            retryElement.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (retryElement.ValueKind != JsonValueKind.Object)
+        {
+            errorCode = "invalid_step_retry";
+            return false;
+        }
+
+        var maxAttempts = 1;
+        if (retryElement.TryGetProperty("max_attempts", out var maxAttemptsElement))
+        {
+            if (maxAttemptsElement.ValueKind != JsonValueKind.Number ||
+                !maxAttemptsElement.TryGetInt32(out maxAttempts) ||
+                maxAttempts is < 1 or > 10)
+            {
+                errorCode = "invalid_step_retry";
+                return false;
+            }
+        }
+
+        var backoffMs = 0;
+        if (retryElement.TryGetProperty("backoff_ms", out var backoffElement))
+        {
+            if (backoffElement.ValueKind != JsonValueKind.Number ||
+                !backoffElement.TryGetInt32(out backoffMs) ||
+                backoffMs is < 0 or > 600000)
+            {
+                errorCode = "invalid_step_retry";
+                return false;
+            }
+        }
+
+        retry = new MetaStepRetryPolicy
+        {
+            MaxAttempts = maxAttempts,
+            BackoffMs = backoffMs
+        };
+        return true;
+    }
+
+    private static bool TryParseOutputContract(JsonElement stepElement, out MetaStepOutputContract outputContract, out string? errorCode)
+    {
+        outputContract = new MetaStepOutputContract();
+        errorCode = null;
+
+        var hasContract = stepElement.TryGetProperty("output_contract", out var contractElement);
+        if (!hasContract)
+            hasContract = stepElement.TryGetProperty("output_schema", out contractElement);
+
+        if (!hasContract || contractElement.ValueKind == JsonValueKind.Null)
+            return true;
+
+        if (contractElement.ValueKind != JsonValueKind.Object)
+        {
+            errorCode = "invalid_output_contract";
+            return false;
+        }
+
+        var format = "text";
+        if (contractElement.TryGetProperty("format", out var formatElement))
+        {
+            if (formatElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(formatElement.GetString()))
+            {
+                errorCode = "invalid_output_contract";
+                return false;
+            }
+
+            format = formatElement.GetString()!.Trim().ToLowerInvariant();
+        }
+
+        if (format is not ("text" or "json"))
+        {
+            errorCode = "invalid_output_contract";
+            return false;
+        }
+
+        var requiredProperties = new List<string>();
+        if (contractElement.TryGetProperty("required_properties", out var requiredElement))
+        {
+            if (requiredElement.ValueKind != JsonValueKind.Array)
+            {
+                errorCode = "invalid_output_contract";
+                return false;
+            }
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in requiredElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String)
+                {
+                    errorCode = "invalid_output_contract";
+                    return false;
+                }
+
+                var propertyName = item.GetString();
+                if (string.IsNullOrWhiteSpace(propertyName) || !seen.Add(propertyName.Trim()))
+                {
+                    errorCode = "invalid_output_contract";
+                    return false;
+                }
+
+                requiredProperties.Add(propertyName.Trim());
+            }
+        }
+
+        outputContract = new MetaStepOutputContract
+        {
+            Format = format,
+            RequiredProperties = requiredProperties
+        };
+        return true;
+    }
+
+    private static bool ValidateFailureBranches(
+        IReadOnlyList<MetaSkillStepDefinition> steps,
+        ISet<string> knownStepIds,
+        out string? errorCode)
+    {
+        errorCode = null;
+        var stepById = steps.ToDictionary(static step => step.Id, StringComparer.OrdinalIgnoreCase);
+        var designatedBy = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var fallbackTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var step in steps)
+        {
+            if (string.IsNullOrWhiteSpace(step.OnFailure))
+                continue;
+
+            if (string.Equals(step.Id, step.OnFailure, StringComparison.OrdinalIgnoreCase) ||
+                !knownStepIds.Contains(step.OnFailure))
+            {
+                errorCode = "invalid_on_failure";
+                return false;
+            }
+
+            var substitute = stepById[step.OnFailure!];
+            if (!string.IsNullOrWhiteSpace(substitute.OnFailure) || substitute.DependsOn.Count > 0)
+            {
+                errorCode = "invalid_on_failure";
+                return false;
+            }
+
+            if (designatedBy.TryGetValue(step.OnFailure!, out _))
+            {
+                errorCode = "invalid_on_failure";
+                return false;
+            }
+
+            designatedBy[step.OnFailure!] = step.Id;
+            fallbackTargets.Add(step.OnFailure!);
+        }
+
+        foreach (var step in steps)
+        {
+            foreach (var dependency in step.DependsOn)
+            {
+                if (!fallbackTargets.Contains(dependency))
+                    continue;
+
+                errorCode = "invalid_on_failure";
+                return false;
+            }
         }
 
         return true;

@@ -240,6 +240,7 @@ public sealed class SessionMetaExecutionCheckpoint
     public List<string> PendingStepIds { get; init; } = [];
     public List<string> BlockedStepIds { get; init; } = [];
     public Dictionary<string, string> Outputs { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> FailureAliases { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public List<SessionMetaStepResult> StepResults { get; init; } = [];
 }
 

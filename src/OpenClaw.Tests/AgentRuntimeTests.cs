@@ -620,6 +620,318 @@ public class AgentRuntimeTests
     }
 
     [Fact]
+    public async Task ExecuteMetaSkillAsync_OnFailure_ExecutesSubstituteAndMirrorsOutputToPrimaryStep()
+    {
+        var failingTool = new ThrowingTool("failing_tool", "boom");
+        var fallbackTool = new CountingTool("fallback_tool", "fallback ok");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [failingTool, fallbackTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "step:first",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "first",
+                                Kind = "tool_call",
+                                Tool = "failing_tool",
+                                OnFailure = "fallback"
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "fallback",
+                                Kind = "tool_call",
+                                Tool = "fallback_tool"
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var session = new Session { Id = "meta-sess", SenderId = "user1", ChannelId = "test-channel" };
+        var result = await InvokeMetaSkillAsync(agent, session, "meta-flow", "hello", CancellationToken.None);
+
+        Assert.Equal("fallback ok", result);
+        Assert.Equal(1, fallbackTool.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_OnFailure_HandlesLlmFailureAsStructuredStepFailure()
+    {
+        _chatClient.GetResponseAsync(
+            Arg.Any<IList<ChatMessage>>(),
+            Arg.Any<ChatOptions>(),
+            Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException<ChatResponse>(new InvalidOperationException("provider boom")));
+
+        var fallbackTool = new CountingTool("fallback_tool", "fallback ok");
+        var config = new LlmProviderConfig { Provider = "openai", ApiKey = "test", Model = "gpt-4", RetryCount = 0 };
+        var agent = new AgentRuntime(
+            _chatClient,
+            [fallbackTool],
+            _memory,
+            config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "step:first",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "first",
+                                Kind = "llm_chat",
+                                OnFailure = "fallback"
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "fallback",
+                                Kind = "tool_call",
+                                Tool = "fallback_tool"
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var session = new Session { Id = "meta-sess", SenderId = "user1", ChannelId = "test-channel" };
+        var result = await InvokeMetaSkillAsync(agent, session, "meta-flow", "hello", CancellationToken.None);
+
+        Assert.Equal("fallback ok", result);
+        Assert.Equal(1, fallbackTool.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_OnFailureFallbackUserInputResume_MirrorsOutputToPrimaryStep()
+    {
+        var failingTool = new ThrowingTool("failing_tool", "boom");
+        var postTool = new CountingTool("post_tool", "completed");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [failingTool, postTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "step:finish",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "first",
+                                Kind = "tool_call",
+                                Tool = "failing_tool",
+                                OnFailure = "ask"
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "ask",
+                                Kind = "user_input",
+                                WithJson = "{\"prompt\":\"Please recover\"}"
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "finish",
+                                Kind = "tool_call",
+                                Tool = "post_tool",
+                                DependsOn = ["first"]
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var session = new Session { Id = "meta-sess", SenderId = "user1", ChannelId = "test-channel" };
+
+        var paused = await InvokeMetaSkillAsync(agent, session, "meta-flow", string.Empty, CancellationToken.None);
+        Assert.Contains("requires user input", paused, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(session.MetaExecutionCheckpoint);
+        Assert.Equal(0, postTool.CallCount);
+
+        var resumed = await InvokeMetaSkillAsync(agent, session, "meta-flow", "approved", CancellationToken.None);
+
+        Assert.Equal("completed", resumed);
+        Assert.Null(session.MetaExecutionCheckpoint);
+        Assert.Equal(1, postTool.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_RetryPolicy_RetriesToolStepUntilItSucceeds()
+    {
+        var flakyTool = new FlakyTool("flaky_tool", failAttempts: 2, result: "ok after retry");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [flakyTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "first",
+                                Kind = "tool_call",
+                                Tool = "flaky_tool",
+                                Retry = new MetaStepRetryPolicy { MaxAttempts = 3 }
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var session = new Session { Id = "meta-sess", SenderId = "user1", ChannelId = "test-channel" };
+        var result = await InvokeMetaSkillAsync(agent, session, "meta-flow", "hello", CancellationToken.None);
+
+        Assert.Equal("ok after retry", result);
+        Assert.Equal(3, flakyTool.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_TimeoutPolicy_PassesStepScopedCancellationToken()
+    {
+        var cancellationTool = new CancellationAwareTool("cancellable_tool");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [cancellationTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "first",
+                                Kind = "tool_call",
+                                Tool = "cancellable_tool",
+                                TimeoutSeconds = 1
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var session = new Session { Id = "meta-sess", SenderId = "user1", ChannelId = "test-channel" };
+        var result = await InvokeMetaSkillAsync(agent, session, "meta-flow", "hello", CancellationToken.None);
+
+        Assert.Equal("timed out", result);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_OutputContractFailure_ReturnsStructuredError()
+    {
+        _chatClient.GetResponseAsync(
+            Arg.Any<IList<ChatMessage>>(),
+            Arg.Any<ChatOptions>(),
+            Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChatResponse(new[] { new ChatMessage(ChatRole.Assistant, "not json") })));
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "structured",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "draft",
+                                Kind = "llm_chat",
+                                OutputContract = new MetaStepOutputContract
+                                {
+                                    Format = "json",
+                                    RequiredProperties = ["answer"]
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var session = new Session { Id = "meta-sess", SenderId = "user1", ChannelId = "test-channel" };
+        var result = await InvokeMetaSkillAsync(agent, session, "meta-flow", "hello", CancellationToken.None);
+
+        using var doc = JsonDocument.Parse(result);
+        Assert.Equal("output_contract_failed", doc.RootElement.GetProperty("error_code").GetString());
+        var steps = doc.RootElement.GetProperty("steps").EnumerateArray().ToArray();
+        Assert.Single(steps);
+        Assert.Equal("draft", steps[0].GetProperty("id").GetString());
+        Assert.Equal("failed", steps[0].GetProperty("status").GetString());
+        Assert.Equal("output_contract_failed", steps[0].GetProperty("failure_code").GetString());
+    }
+
+    [Fact]
     public async Task ExecuteMetaSkillAsync_StructuredMode_ReturnsStepStatusesAndFailureCodes()
     {
         var failingTool = new ThrowingTool("failing_tool", "boom");
@@ -1085,6 +1397,48 @@ public class AgentRuntimeTests
 
         public ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
             => throw new InvalidOperationException(message);
+    }
+
+    private sealed class FlakyTool(string name, int failAttempts, string result) : ITool
+    {
+        private int _callCount;
+
+        public int CallCount => Volatile.Read(ref _callCount);
+        public string Name { get; } = name;
+        public string Description => "Flaky tool";
+        public string ParameterSchema => """{"type":"object"}""";
+
+        public ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
+        {
+            _ = argumentsJson;
+            _ = ct;
+            var callCount = Interlocked.Increment(ref _callCount);
+            if (callCount <= failAttempts)
+                throw new InvalidOperationException("transient");
+
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class CancellationAwareTool(string name) : ITool
+    {
+        public string Name { get; } = name;
+        public string Description => "Cancellation-aware tool";
+        public string ParameterSchema => """{"type":"object"}""";
+
+        public async ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
+        {
+            _ = argumentsJson;
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(1500), ct);
+                return "not-timeout";
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return "timed out";
+            }
+        }
     }
 
     private sealed class CheckpointCaptureMemoryStore : IMemoryStore

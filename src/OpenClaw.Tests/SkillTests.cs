@@ -604,6 +604,140 @@ public class SkillLoaderTests
     }
 
     [Fact]
+    public void ParseSkillContent_MetaOnFailureTarget_ParsesSuccessfully()
+    {
+        var content = """
+            ---
+            name: meta-on-failure-valid
+            description: Valid failure branch
+            kind: meta
+            composition: {"steps":[{"id":"primary","kind":"tool_call","tool":"unstable","on_failure":"fallback"},{"id":"fallback","kind":"tool_call","tool":"safe"}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-on-failure-valid", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        Assert.Equal("fallback", skill!.Composition!.Steps[0].OnFailure);
+    }
+
+    [Fact]
+    public void ParseSkillContent_MetaOnFailureTargetWithDependency_ReturnsNull()
+    {
+        var content = """
+            ---
+            name: meta-on-failure-invalid-dependency
+            description: Invalid failure branch
+            kind: meta
+            composition: {"steps":[{"id":"primary","kind":"tool_call","tool":"unstable","on_failure":"fallback"},{"id":"fallback","kind":"tool_call","tool":"safe","depends_on":["primary"]}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-on-failure-invalid-dependency", SkillSource.Workspace);
+
+        Assert.Null(skill);
+    }
+
+    [Fact]
+    public void ParseSkillContent_MetaOnFailureTargetUsedAsDependency_ReturnsNull()
+    {
+        var content = """
+            ---
+            name: meta-on-failure-invalid-dependent
+            description: Invalid direct dependency on fallback branch
+            kind: meta
+            composition: {"steps":[{"id":"primary","kind":"tool_call","tool":"unstable","on_failure":"fallback"},{"id":"fallback","kind":"tool_call","tool":"safe"},{"id":"after","kind":"tool_call","tool":"next","depends_on":["fallback"]}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-on-failure-invalid-dependent", SkillSource.Workspace);
+
+        Assert.Null(skill);
+    }
+
+    [Fact]
+    public void ParseSkillContent_MetaStepRetryTimeoutPolicy_ParsesSuccessfully()
+    {
+        var content = """
+            ---
+            name: meta-step-policy-valid
+            description: Valid retry and timeout policy
+            kind: meta
+            composition: {"steps":[{"id":"call","kind":"tool_call","tool":"unstable","timeout_seconds":2,"retry":{"max_attempts":3,"backoff_ms":10}}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-step-policy-valid", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        var step = skill!.Composition!.Steps[0];
+        Assert.Equal(2, step.TimeoutSeconds);
+        Assert.Equal(3, step.Retry.MaxAttempts);
+        Assert.Equal(10, step.Retry.BackoffMs);
+    }
+
+    [Fact]
+    public void ParseSkillContent_MetaStepRetryWithInvalidAttempts_ReturnsNull()
+    {
+        var content = """
+            ---
+            name: meta-step-policy-invalid
+            description: Invalid retry policy
+            kind: meta
+            composition: {"steps":[{"id":"call","kind":"tool_call","tool":"unstable","retry":{"max_attempts":0}}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-step-policy-invalid", SkillSource.Workspace);
+
+        Assert.Null(skill);
+    }
+
+    [Fact]
+    public void ParseSkillContent_MetaOutputContract_ParsesSuccessfully()
+    {
+        var content = """
+            ---
+            name: meta-output-contract-valid
+            description: Valid output contract
+            kind: meta
+            composition: {"steps":[{"id":"draft","kind":"llm_chat","with":{"input":"hello"},"output_contract":{"format":"json","required_properties":["answer"]}}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-output-contract-valid", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        var contract = skill!.Composition!.Steps[0].OutputContract;
+        Assert.Equal("json", contract.Format);
+        Assert.Equal(["answer"], contract.RequiredProperties);
+    }
+
+    [Fact]
+    public void ParseSkillContent_MetaOutputContractWithUnsupportedFormat_ReturnsNull()
+    {
+        var content = """
+            ---
+            name: meta-output-contract-invalid
+            description: Invalid output contract
+            kind: meta
+            composition: {"steps":[{"id":"draft","kind":"llm_chat","with":{"input":"hello"},"output_contract":{"format":"xml"}}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-output-contract-invalid", SkillSource.Workspace);
+
+        Assert.Null(skill);
+    }
+
+    [Fact]
     public void ParseSkillContent_MetaCompositionWithDependencyCycle_ReturnsNull()
     {
         var content = """

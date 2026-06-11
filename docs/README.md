@@ -26,6 +26,7 @@ Use this page as the map. If you are unsure where to go next, the groups below a
 | [SKILLKIT.md](SKILLKIT.md) | Local-first `openclaw skill` workflows for defining, validating, critiquing, packaging, and dry-running reusable OpenClaw skills. |
 | [LOCAL_MODELS.md](LOCAL_MODELS.md) | Embedded local model packages, supervised sidecars, frame-based video support, and experimental LiteRT-LM adapter guidance. |
 | [opensquilla-dynamic-turn-routing.md](opensquilla-dynamic-turn-routing.md) | Independent guide to the OpenSquilla-style dynamic turn-routing surface, current implementation status, runtime wiring, and operator expectations. |
+| [opensquilla-meta-skill-migration.md](opensquilla-meta-skill-migration.md) | OpenClaw.NET meta-skill migration notes for OpenSquilla-style DAG orchestration, current parity, and remaining migration gaps. |
 | [dynamic-turn-routing-model-profiles.md](dynamic-turn-routing-model-profiles.md) | Collaboration playbook for how Dynamic Turn Routing and Model Profiles work together (precedence, field projection, fallback, and restore semantics). |
 | [EXTERNAL_CLI_CONNECTORS.md](EXTERNAL_CLI_CONNECTORS.md) | Governed external CLI connectors, optional presets, named command allowlists, approvals, redaction, and audit behavior. |
 | [plugins/payment.md](plugins/payment.md) | Native payment tool, virtual cards, machine payments, providers, and safe agent-facing actions. |

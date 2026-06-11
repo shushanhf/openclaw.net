@@ -1170,6 +1170,353 @@ public sealed class MafAdapterTests
     }
 
     [Fact]
+    public async Task MafAgentRuntime_ExecuteMetaSkillAsync_OnFailure_ExecutesSubstituteAndMirrorsOutputToPrimaryStep()
+    {
+        var storagePath = Path.Join(Path.GetTempPath(), "openclaw-maf-meta-on-failure-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storagePath);
+
+        try
+        {
+            var failingTool = new ThrowingMafTool("failing_tool", "boom");
+            var fallbackTool = new CountingMafTool("fallback_tool", "fallback ok");
+            var runtime = CreateRuntime(
+                storagePath,
+                new TestLlmExecutionService(),
+                new MafOptions(),
+                tools: [failingTool, fallbackTool],
+                skills:
+                [
+                    new SkillDefinition
+                    {
+                        Name = "meta-flow",
+                        Description = "meta flow",
+                        Instructions = "...",
+                        Location = "/skills/meta-flow",
+                        Kind = SkillKind.Meta,
+                        FinalTextMode = "step:first",
+                        Composition = new MetaSkillComposition
+                        {
+                            Steps =
+                            [
+                                new MetaSkillStepDefinition
+                                {
+                                    Id = "first",
+                                    Kind = "tool_call",
+                                    Tool = "failing_tool",
+                                    OnFailure = "fallback"
+                                },
+                                new MetaSkillStepDefinition
+                                {
+                                    Id = "fallback",
+                                    Kind = "tool_call",
+                                    Tool = "fallback_tool"
+                                }
+                            ]
+                        }
+                    }
+                ]);
+            var session = CreateSession("maf-meta-on-failure");
+
+            var result = await InvokeMafMetaSkillAsync(runtime, session, "meta-flow", "hello", CancellationToken.None);
+
+            Assert.Equal("fallback ok", result);
+            Assert.Equal(1, fallbackTool.CallCount);
+        }
+        finally
+        {
+            Directory.Delete(storagePath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task MafAgentRuntime_ExecuteMetaSkillAsync_OnFailure_HandlesLlmFailureAsStructuredStepFailure()
+    {
+        var storagePath = Path.Join(Path.GetTempPath(), "openclaw-maf-meta-on-failure-llm-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storagePath);
+
+        try
+        {
+            var fallbackTool = new CountingMafTool("fallback_tool", "fallback ok");
+            var runtime = CreateRuntime(
+                storagePath,
+                new ThrowingTestLlmExecutionService(),
+                new MafOptions(),
+                tools: [fallbackTool],
+                skills:
+                [
+                    new SkillDefinition
+                    {
+                        Name = "meta-flow",
+                        Description = "meta flow",
+                        Instructions = "...",
+                        Location = "/skills/meta-flow",
+                        Kind = SkillKind.Meta,
+                        FinalTextMode = "step:first",
+                        Composition = new MetaSkillComposition
+                        {
+                            Steps =
+                            [
+                                new MetaSkillStepDefinition
+                                {
+                                    Id = "first",
+                                    Kind = "llm_chat",
+                                    OnFailure = "fallback"
+                                },
+                                new MetaSkillStepDefinition
+                                {
+                                    Id = "fallback",
+                                    Kind = "tool_call",
+                                    Tool = "fallback_tool"
+                                }
+                            ]
+                        }
+                    }
+                ]);
+            var session = CreateSession("maf-meta-on-failure-llm");
+
+            var result = await InvokeMafMetaSkillWithExecutionContextAsync(runtime, session, "meta-flow", "hello", CancellationToken.None);
+
+            Assert.Equal("fallback ok", result);
+            Assert.Equal(1, fallbackTool.CallCount);
+        }
+        finally
+        {
+            Directory.Delete(storagePath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task MafAgentRuntime_ExecuteMetaSkillAsync_OnFailureFallbackUserInputResume_MirrorsOutputToPrimaryStep()
+    {
+        var storagePath = Path.Join(Path.GetTempPath(), "openclaw-maf-meta-on-failure-resume-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storagePath);
+
+        try
+        {
+            var failingTool = new ThrowingMafTool("failing_tool", "boom");
+            var postTool = new CountingMafTool("post_tool", "completed");
+            var runtime = CreateRuntime(
+                storagePath,
+                new TestLlmExecutionService(),
+                new MafOptions(),
+                tools: [failingTool, postTool],
+                skills:
+                [
+                    new SkillDefinition
+                    {
+                        Name = "meta-flow",
+                        Description = "meta flow",
+                        Instructions = "...",
+                        Location = "/skills/meta-flow",
+                        Kind = SkillKind.Meta,
+                        FinalTextMode = "step:finish",
+                        Composition = new MetaSkillComposition
+                        {
+                            Steps =
+                            [
+                                new MetaSkillStepDefinition
+                                {
+                                    Id = "first",
+                                    Kind = "tool_call",
+                                    Tool = "failing_tool",
+                                    OnFailure = "ask"
+                                },
+                                new MetaSkillStepDefinition
+                                {
+                                    Id = "ask",
+                                    Kind = "user_input",
+                                    WithJson = "{\"prompt\":\"Please recover\"}"
+                                },
+                                new MetaSkillStepDefinition
+                                {
+                                    Id = "finish",
+                                    Kind = "tool_call",
+                                    Tool = "post_tool",
+                                    DependsOn = ["first"]
+                                }
+                            ]
+                        }
+                    }
+                ]);
+            var session = CreateSession("maf-meta-on-failure-resume");
+
+            var paused = await InvokeMafMetaSkillAsync(runtime, session, "meta-flow", string.Empty, CancellationToken.None);
+            Assert.Contains("requires user input", paused, StringComparison.OrdinalIgnoreCase);
+            Assert.NotNull(session.MetaExecutionCheckpoint);
+            Assert.Equal(0, postTool.CallCount);
+
+            var resumed = await InvokeMafMetaSkillAsync(runtime, session, "meta-flow", "approved", CancellationToken.None);
+
+            Assert.Equal("completed", resumed);
+            Assert.Null(session.MetaExecutionCheckpoint);
+            Assert.Equal(1, postTool.CallCount);
+        }
+        finally
+        {
+            Directory.Delete(storagePath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task MafAgentRuntime_ExecuteMetaSkillAsync_RetryPolicy_RetriesToolStepUntilItSucceeds()
+    {
+        var storagePath = Path.Join(Path.GetTempPath(), "openclaw-maf-meta-retry-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storagePath);
+
+        try
+        {
+            var flakyTool = new FlakyMafTool("flaky_tool", failAttempts: 2, result: "ok after retry");
+            var runtime = CreateRuntime(
+                storagePath,
+                new TestLlmExecutionService(),
+                new MafOptions(),
+                tools: [flakyTool],
+                skills:
+                [
+                    new SkillDefinition
+                    {
+                        Name = "meta-flow",
+                        Description = "meta flow",
+                        Instructions = "...",
+                        Location = "/skills/meta-flow",
+                        Kind = SkillKind.Meta,
+                        Composition = new MetaSkillComposition
+                        {
+                            Steps =
+                            [
+                                new MetaSkillStepDefinition
+                                {
+                                    Id = "first",
+                                    Kind = "tool_call",
+                                    Tool = "flaky_tool",
+                                    Retry = new MetaStepRetryPolicy { MaxAttempts = 3 }
+                                }
+                            ]
+                        }
+                    }
+                ]);
+            var session = CreateSession("maf-meta-retry");
+
+            var result = await InvokeMafMetaSkillAsync(runtime, session, "meta-flow", "hello", CancellationToken.None);
+
+            Assert.Equal("ok after retry", result);
+            Assert.Equal(3, flakyTool.CallCount);
+        }
+        finally
+        {
+            Directory.Delete(storagePath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task MafAgentRuntime_ExecuteMetaSkillAsync_TimeoutPolicy_PassesStepScopedCancellationToken()
+    {
+        var storagePath = Path.Join(Path.GetTempPath(), "openclaw-maf-meta-timeout-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storagePath);
+
+        try
+        {
+            var cancellationTool = new CancellationAwareMafTool("cancellable_tool");
+            var runtime = CreateRuntime(
+                storagePath,
+                new TestLlmExecutionService(),
+                new MafOptions(),
+                tools: [cancellationTool],
+                skills:
+                [
+                    new SkillDefinition
+                    {
+                        Name = "meta-flow",
+                        Description = "meta flow",
+                        Instructions = "...",
+                        Location = "/skills/meta-flow",
+                        Kind = SkillKind.Meta,
+                        Composition = new MetaSkillComposition
+                        {
+                            Steps =
+                            [
+                                new MetaSkillStepDefinition
+                                {
+                                    Id = "first",
+                                    Kind = "tool_call",
+                                    Tool = "cancellable_tool",
+                                    TimeoutSeconds = 1
+                                }
+                            ]
+                        }
+                    }
+                ]);
+            var session = CreateSession("maf-meta-timeout");
+
+            var result = await InvokeMafMetaSkillAsync(runtime, session, "meta-flow", "hello", CancellationToken.None);
+
+            Assert.Equal("timed out", result);
+        }
+        finally
+        {
+            Directory.Delete(storagePath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task MafAgentRuntime_ExecuteMetaSkillAsync_OutputContractFailure_ReturnsStructuredError()
+    {
+        var storagePath = Path.Join(Path.GetTempPath(), "openclaw-maf-meta-output-contract-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storagePath);
+
+        try
+        {
+            var runtime = CreateRuntime(
+                storagePath,
+                new TestLlmExecutionService(),
+                new MafOptions(),
+                skills:
+                [
+                    new SkillDefinition
+                    {
+                        Name = "meta-flow",
+                        Description = "meta flow",
+                        Instructions = "...",
+                        Location = "/skills/meta-flow",
+                        Kind = SkillKind.Meta,
+                        FinalTextMode = "structured",
+                        Composition = new MetaSkillComposition
+                        {
+                            Steps =
+                            [
+                                new MetaSkillStepDefinition
+                                {
+                                    Id = "draft",
+                                    Kind = "llm_chat",
+                                    OutputContract = new MetaStepOutputContract
+                                    {
+                                        Format = "json",
+                                        RequiredProperties = ["answer"]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]);
+            var session = CreateSession("maf-meta-output-contract");
+
+            var result = await InvokeMafMetaSkillWithExecutionContextAsync(runtime, session, "meta-flow", "hello", CancellationToken.None);
+
+            using var doc = JsonDocument.Parse(result);
+            Assert.Equal("output_contract_failed", doc.RootElement.GetProperty("error_code").GetString());
+            var steps = doc.RootElement.GetProperty("steps").EnumerateArray().ToArray();
+            Assert.Single(steps);
+            Assert.Equal("draft", steps[0].GetProperty("id").GetString());
+            Assert.Equal("failed", steps[0].GetProperty("status").GetString());
+            Assert.Equal("output_contract_failed", steps[0].GetProperty("failure_code").GetString());
+        }
+        finally
+        {
+            Directory.Delete(storagePath, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task MafAgentRuntime_ExecuteMetaSkillAsync_ClassifyRoute_BlocksUnmatchedBranch()
     {
         var storagePath = Path.Join(Path.GetTempPath(), "openclaw-maf-meta-classify-route-tests", Guid.NewGuid().ToString("N"));
@@ -1938,6 +2285,48 @@ public sealed class MafAdapterTests
         }
     }
 
+    private sealed class FlakyMafTool(string name, int failAttempts, string result) : ITool
+    {
+        private int _callCount;
+
+        public int CallCount => Volatile.Read(ref _callCount);
+        public string Name => name;
+        public string Description => "Flaky test tool.";
+        public string ParameterSchema => """{"type":"object"}""";
+
+        public ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
+        {
+            _ = argumentsJson;
+            _ = ct;
+            var callCount = Interlocked.Increment(ref _callCount);
+            if (callCount <= failAttempts)
+                throw new InvalidOperationException("transient");
+
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class CancellationAwareMafTool(string name) : ITool
+    {
+        public string Name => name;
+        public string Description => "Cancellation-aware test tool.";
+        public string ParameterSchema => """{"type":"object"}""";
+
+        public async ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
+        {
+            _ = argumentsJson;
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(1500), ct);
+                return "not-timeout";
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return "timed out";
+            }
+        }
+    }
+
     private sealed class TestToolPresetResolver(IEnumerable<string> allowedTools) : IToolPresetResolver
     {
         private readonly ResolvedToolPreset _preset = new()
@@ -2215,6 +2604,45 @@ public sealed class MafAdapterTests
                 ModelId = "maf-test-model",
                 Updates = AsyncEnumerable.Empty<ChatResponseUpdate>()
             });
+        }
+    }
+
+    private sealed class ThrowingTestLlmExecutionService : ILlmExecutionService
+    {
+        public CircuitState DefaultCircuitState => CircuitState.Closed;
+
+        public Task<LlmExecutionResult> GetResponseAsync(
+            Session session,
+            IReadOnlyList<ChatMessage> messages,
+            ChatOptions options,
+            TurnContext turnContext,
+            LlmExecutionEstimate estimate,
+            CancellationToken ct)
+        {
+            _ = session;
+            _ = messages;
+            _ = options;
+            _ = turnContext;
+            _ = estimate;
+            _ = ct;
+            return Task.FromException<LlmExecutionResult>(new InvalidOperationException("provider boom"));
+        }
+
+        public Task<LlmStreamingExecutionResult> StartStreamingAsync(
+            Session session,
+            IReadOnlyList<ChatMessage> messages,
+            ChatOptions options,
+            TurnContext turnContext,
+            LlmExecutionEstimate estimate,
+            CancellationToken ct)
+        {
+            _ = session;
+            _ = messages;
+            _ = options;
+            _ = turnContext;
+            _ = estimate;
+            _ = ct;
+            return Task.FromException<LlmStreamingExecutionResult>(new InvalidOperationException("provider boom"));
         }
     }
 

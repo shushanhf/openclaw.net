@@ -1981,10 +1981,15 @@ public sealed class AgentRuntime : IAgentRuntime
             return BuildMetaExecutionOutput(metaSkill, finalText: null, stepResults: [], validationError);
 
         var stepById = steps.ToDictionary(static step => step.Id, StringComparer.OrdinalIgnoreCase);
+        var failureBranchTargets = steps
+            .Where(static step => !string.IsNullOrWhiteSpace(step.OnFailure))
+            .Select(static step => step.OnFailure!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var dependentsByStep = BuildDependentsIndex(steps);
-        var pending = new HashSet<string>(stepById.Keys, StringComparer.OrdinalIgnoreCase);
+        var pending = new HashSet<string>(stepById.Keys.Where(stepId => !failureBranchTargets.Contains(stepId)), StringComparer.OrdinalIgnoreCase);
         var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var outputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var failureAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var stepResults = new List<MetaStepExecutionResult>(steps.Count);
         var resumedFromCheckpoint = TryRestoreMetaExecutionCheckpoint(
             session,
@@ -1993,6 +1998,7 @@ public sealed class AgentRuntime : IAgentRuntime
             pending,
             blocked,
             outputs,
+            failureAliases,
             stepResults,
             out var waitingPrompt);
         if (resumedFromCheckpoint)
@@ -2093,33 +2099,47 @@ public sealed class AgentRuntime : IAgentRuntime
                             : RewriteMetaTemplateJson(step.WithJson!, input, outputs);
 
                         var stepSw = Stopwatch.StartNew();
-                        var toolResult = await _toolExecutor.ExecuteAsync(
+                        var toolResult = await ExecuteMetaToolStepWithPolicyAsync(
+                            metaSkill,
+                            step,
                             toolName,
                             toolArgsJson,
-                            $"meta:{metaSkill.Name}:{step.Id}",
                             session,
                             turnCtx,
-                            isStreaming: false,
-                            approvalCallback: null,
-                            ct: ct,
-                            onDelta: null,
-                            toolCallCount: 1);
+                            ct);
                         stepSw.Stop();
 
-                        outputs[step.Id] = toolResult.ResultText;
-                        pending.Remove(step.Id);
-                        progress = true;
-
                         var completed = string.Equals(toolResult.ResultStatus, ToolResultStatuses.Completed, StringComparison.Ordinal);
+                        var resultStatus = toolResult.ResultStatus;
+                        var failureCode = toolResult.FailureCode;
+                        if (completed && !TryValidateMetaStepOutput(step, toolResult.ResultText, out failureCode))
+                        {
+                            completed = false;
+                            resultStatus = ToolResultStatuses.Failed;
+                        }
+
                         stepResults.Add(new MetaStepExecutionResult(
                             step.Id,
                             step.Kind,
-                            toolResult.ResultStatus,
-                            toolResult.FailureCode,
+                            resultStatus,
+                            failureCode,
                             stepSw.Elapsed.TotalMilliseconds,
                             Continued: !completed && continueOnError));
 
-                        if (!completed && !continueOnError)
+                        if (completed)
+                        {
+                            CompleteMetaStepOutput(step, toolResult.ResultText, pending, outputs, failureAliases);
+                            progress = true;
+                            break;
+                        }
+
+                        if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                        {
+                            progress = true;
+                            break;
+                        }
+
+                        if (!continueOnError)
                         {
                             return BuildMetaExecutionOutput(
                                 metaSkill,
@@ -2127,6 +2147,9 @@ public sealed class AgentRuntime : IAgentRuntime
                                 stepResults,
                                 $"Meta step '{step.Id}' failed with status '{toolResult.ResultStatus}'.");
                         }
+
+                        CompleteMetaStepOutput(step, toolResult.ResultText, pending, outputs, failureAliases);
+                        progress = true;
 
                         break;
                     }
@@ -2161,11 +2184,63 @@ public sealed class AgentRuntime : IAgentRuntime
                         };
 
                         var stepSw = Stopwatch.StartNew();
-                        var llmResult = await CallLlmWithResilienceAsync(session, messages, options, turnCtx, ct);
+                        var llmResult = await ExecuteMetaLlmStepWithPolicyAsync(
+                            step,
+                            token => CallLlmWithResilienceAsync(session, messages, options, turnCtx, token),
+                            ct);
                         stepSw.Stop();
 
-                        outputs[step.Id] = llmResult.Response.Text ?? string.Empty;
-                        pending.Remove(step.Id);
+                        if (!llmResult.Completed)
+                        {
+                            var failureMessage = llmResult.FailureMessage ?? $"Meta step '{step.Id}' failed before producing a response.";
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, llmResult.FailureCode, stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return BuildMetaExecutionOutput(
+                                    metaSkill,
+                                    finalText: null,
+                                    stepResults,
+                                    failureMessage);
+                            }
+
+                            CompleteMetaStepOutput(step, failureMessage, pending, outputs, failureAliases);
+                            progress = true;
+                            break;
+                        }
+
+                        var stepOutput = llmResult.ExecutionResult!.Response.Text ?? string.Empty;
+                        if (!TryValidateMetaStepOutput(step, stepOutput, out var failureCode))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, failureCode, stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return BuildMetaExecutionOutput(
+                                    metaSkill,
+                                    finalText: null,
+                                    stepResults,
+                                    $"Meta step '{step.Id}' failed output contract validation.");
+                            }
+
+                                    CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
+                                    progress = true;
+                                    break;
+                        }
+
+                        CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
                         progress = true;
                         stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, stepSw.Elapsed.TotalMilliseconds, Continued: false));
                         break;
@@ -2188,11 +2263,63 @@ public sealed class AgentRuntime : IAgentRuntime
                         };
 
                         var stepSw = Stopwatch.StartNew();
-                        var llmResult = await CallLlmWithResilienceAsync(session, messages, options, turnCtx, ct);
+                        var llmResult = await ExecuteMetaLlmStepWithPolicyAsync(
+                            step,
+                            token => CallLlmWithResilienceAsync(session, messages, options, turnCtx, token),
+                            ct);
                         stepSw.Stop();
 
-                        outputs[step.Id] = llmResult.Response.Text ?? string.Empty;
-                        pending.Remove(step.Id);
+                        if (!llmResult.Completed)
+                        {
+                            var failureMessage = llmResult.FailureMessage ?? $"Meta step '{step.Id}' failed before producing a response.";
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, llmResult.FailureCode, stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return BuildMetaExecutionOutput(
+                                    metaSkill,
+                                    finalText: null,
+                                    stepResults,
+                                    failureMessage);
+                            }
+
+                            CompleteMetaStepOutput(step, failureMessage, pending, outputs, failureAliases);
+                            progress = true;
+                            break;
+                        }
+
+                        var stepOutput = llmResult.ExecutionResult!.Response.Text ?? string.Empty;
+                        if (!TryValidateMetaStepOutput(step, stepOutput, out var failureCode))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, failureCode, stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return BuildMetaExecutionOutput(
+                                    metaSkill,
+                                    finalText: null,
+                                    stepResults,
+                                    $"Meta step '{step.Id}' failed output contract validation.");
+                            }
+
+                                    CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
+                                    progress = true;
+                                    break;
+                        }
+
+                        CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
                         progress = true;
                         stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, stepSw.Elapsed.TotalMilliseconds, Continued: false));
                         break;
@@ -2223,15 +2350,47 @@ public sealed class AgentRuntime : IAgentRuntime
                         };
 
                         var stepSw = Stopwatch.StartNew();
-                        var llmResult = await CallLlmWithResilienceAsync(session, messages, options, turnCtx, ct);
+                        var llmResult = await ExecuteMetaLlmStepWithPolicyAsync(
+                            step,
+                            token => CallLlmWithResilienceAsync(session, messages, options, turnCtx, token),
+                            ct);
                         stepSw.Stop();
 
-                        var rawLabel = llmResult.Response.Text?.Trim() ?? string.Empty;
+                        if (!llmResult.Completed)
+                        {
+                            var failureMessage = llmResult.FailureMessage ?? $"Meta step '{step.Id}' failed before producing a response.";
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, llmResult.FailureCode, stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return BuildMetaExecutionOutput(
+                                    metaSkill,
+                                    finalText: null,
+                                    stepResults,
+                                    failureMessage);
+                            }
+
+                            CompleteMetaStepOutput(step, failureMessage, pending, outputs, failureAliases);
+                            progress = true;
+                            break;
+                        }
+
+                        var rawLabel = llmResult.ExecutionResult!.Response.Text?.Trim() ?? string.Empty;
                         if (!TryResolveClassificationLabel(rawLabel, optionsValues, out var selectedLabel))
                         {
-                            pending.Remove(step.Id);
-                            progress = true;
                             stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "invalid_classification", stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
 
                             if (!continueOnError)
                             {
@@ -2242,12 +2401,36 @@ public sealed class AgentRuntime : IAgentRuntime
                                     $"Meta step '{step.Id}' returned classification '{rawLabel}' outside declared options.");
                             }
 
-                            outputs[step.Id] = rawLabel;
+                            CompleteMetaStepOutput(step, rawLabel, pending, outputs, failureAliases);
+                            progress = true;
                             break;
                         }
 
-                        outputs[step.Id] = selectedLabel!;
-                        pending.Remove(step.Id);
+                        if (!TryValidateMetaStepOutput(step, selectedLabel!, out var outputFailureCode))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, outputFailureCode, stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return BuildMetaExecutionOutput(
+                                    metaSkill,
+                                    finalText: null,
+                                    stepResults,
+                                    $"Meta step '{step.Id}' failed output contract validation.");
+                            }
+
+                                    CompleteMetaStepOutput(step, selectedLabel!, pending, outputs, failureAliases);
+                                    progress = true;
+                                    break;
+                        }
+
+                        CompleteMetaStepOutput(step, selectedLabel!, pending, outputs, failureAliases);
                         progress = true;
                         stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, stepSw.Elapsed.TotalMilliseconds, Continued: false));
 
@@ -2284,11 +2467,16 @@ public sealed class AgentRuntime : IAgentRuntime
                                 pending,
                                 blocked,
                                 outputs,
+                                failureAliases,
                                 stepResults);
 
-                            pending.Remove(step.Id);
-                            progress = true;
                             stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "user_input_required", 0, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
 
                             if (!continueOnError)
                             {
@@ -2299,12 +2487,36 @@ public sealed class AgentRuntime : IAgentRuntime
                                         $"Meta step '{step.Id}' requires user input but no value/default is available in the current execution context. Prompt: {prompt}");
                             }
 
-                            outputs[step.Id] = string.Empty;
+                            CompleteMetaStepOutput(step, string.Empty, pending, outputs, failureAliases);
+                            progress = true;
                             break;
                         }
 
-                        outputs[step.Id] = userValue;
-                        pending.Remove(step.Id);
+                        if (!TryValidateMetaStepOutput(step, userValue, out var failureCode))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, failureCode, 0, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return BuildMetaExecutionOutput(
+                                    metaSkill,
+                                    finalText: null,
+                                    stepResults,
+                                    $"Meta step '{step.Id}' failed output contract validation.");
+                            }
+
+                                    CompleteMetaStepOutput(step, userValue, pending, outputs, failureAliases);
+                                    progress = true;
+                                    break;
+                        }
+
+                        CompleteMetaStepOutput(step, userValue, pending, outputs, failureAliases);
                         progress = true;
                         stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, 0, Continued: false));
                         break;
@@ -2396,6 +2608,7 @@ public sealed class AgentRuntime : IAgentRuntime
         HashSet<string> pending,
         HashSet<string> blocked,
         Dictionary<string, string> outputs,
+        Dictionary<string, string> failureAliases,
         List<MetaStepExecutionResult> stepResults,
         out string? waitingPrompt)
     {
@@ -2426,6 +2639,10 @@ public sealed class AgentRuntime : IAgentRuntime
         foreach (var (key, value) in checkpoint.Outputs)
             outputs[key] = value;
 
+        failureAliases.Clear();
+        foreach (var (key, value) in checkpoint.FailureAliases)
+            failureAliases[key] = value;
+
         stepResults.Clear();
         foreach (var result in checkpoint.StepResults)
         {
@@ -2451,6 +2668,7 @@ public sealed class AgentRuntime : IAgentRuntime
         HashSet<string> pending,
         HashSet<string> blocked,
         Dictionary<string, string> outputs,
+        Dictionary<string, string> failureAliases,
         IReadOnlyList<MetaStepExecutionResult> stepResults)
     {
         session.MetaExecutionCheckpoint = new SessionMetaExecutionCheckpoint
@@ -2462,6 +2680,7 @@ public sealed class AgentRuntime : IAgentRuntime
             PendingStepIds = pending.ToList(),
             BlockedStepIds = blocked.ToList(),
             Outputs = new Dictionary<string, string>(outputs, StringComparer.OrdinalIgnoreCase),
+            FailureAliases = new Dictionary<string, string>(failureAliases, StringComparer.OrdinalIgnoreCase),
             StepResults = stepResults.Select(static result => new SessionMetaStepResult
             {
                 Id = result.Id,
@@ -2587,6 +2806,223 @@ public sealed class AgentRuntime : IAgentRuntime
         }
 
         return false;
+    }
+
+    private async Task<ToolExecutionResult> ExecuteMetaToolStepWithPolicyAsync(
+        SkillDefinition metaSkill,
+        MetaSkillStepDefinition step,
+        string toolName,
+        string toolArgsJson,
+        Session session,
+        TurnContext turnCtx,
+        CancellationToken ct)
+    {
+        var maxAttempts = Math.Max(1, step.Retry.MaxAttempts);
+        ToolExecutionResult? lastResult = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            using var timeoutCts = CreateMetaStepTimeout(step, ct);
+            var effectiveCt = timeoutCts?.Token ?? ct;
+            try
+            {
+                lastResult = await _toolExecutor.ExecuteAsync(
+                    toolName,
+                    toolArgsJson,
+                    $"meta:{metaSkill.Name}:{step.Id}:attempt:{attempt}",
+                    session,
+                    turnCtx,
+                    isStreaming: false,
+                    approvalCallback: null,
+                    ct: effectiveCt,
+                    onDelta: null,
+                    toolCallCount: attempt);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                lastResult = CreateMetaStepFailedToolResult(
+                    toolName,
+                    toolArgsJson,
+                    "step_timeout",
+                    $"Meta step '{step.Id}' timed out after {step.TimeoutSeconds} second(s).");
+            }
+
+            if (string.Equals(lastResult.ResultStatus, ToolResultStatuses.Completed, StringComparison.Ordinal) || attempt == maxAttempts)
+                return lastResult;
+
+            if (step.Retry.BackoffMs > 0)
+                await Task.Delay(step.Retry.BackoffMs, ct);
+        }
+
+        return lastResult ?? CreateMetaStepFailedToolResult(toolName, toolArgsJson, "step_failed", $"Meta step '{step.Id}' failed before producing a result.");
+    }
+
+    private static async Task<MetaLlmStepExecutionResult> ExecuteMetaLlmStepWithPolicyAsync(
+        MetaSkillStepDefinition step,
+        Func<CancellationToken, Task<LlmExecutionResult>> executeAsync,
+        CancellationToken ct)
+    {
+        var maxAttempts = Math.Max(1, step.Retry.MaxAttempts);
+        string? lastFailureCode = null;
+        string? lastFailureMessage = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            using var timeoutCts = CreateMetaStepTimeout(step, ct);
+            var effectiveCt = timeoutCts?.Token ?? ct;
+            try
+            {
+                return MetaLlmStepExecutionResult.Succeeded(await executeAsync(effectiveCt));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                lastFailureCode = "step_timeout";
+                lastFailureMessage = $"Meta step '{step.Id}' timed out after {step.TimeoutSeconds} second(s).";
+            }
+            catch (Exception ex)
+            {
+                lastFailureCode = "llm_failed";
+                lastFailureMessage = $"Meta step '{step.Id}' failed: {ex.Message}";
+            }
+
+            if (attempt == maxAttempts)
+                return MetaLlmStepExecutionResult.Failed(lastFailureCode ?? "llm_failed", lastFailureMessage ?? $"Meta step '{step.Id}' failed before producing a response.");
+
+            if (attempt < maxAttempts && step.Retry.BackoffMs > 0)
+                await Task.Delay(step.Retry.BackoffMs, ct);
+        }
+
+        return MetaLlmStepExecutionResult.Failed("llm_failed", $"Meta step '{step.Id}' failed before producing a response.");
+    }
+
+    private static CancellationTokenSource? CreateMetaStepTimeout(MetaSkillStepDefinition step, CancellationToken ct)
+    {
+        if (step.TimeoutSeconds is not > 0)
+            return null;
+
+        var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(step.TimeoutSeconds.Value));
+        return timeoutCts;
+    }
+
+    private static ToolExecutionResult CreateMetaStepFailedToolResult(
+        string toolName,
+        string arguments,
+        string failureCode,
+        string failureMessage)
+    {
+        return new ToolExecutionResult
+        {
+            Invocation = new ToolInvocation
+            {
+                ToolName = toolName,
+                Arguments = arguments,
+                Result = failureMessage,
+                ResultStatus = ToolResultStatuses.Failed,
+                FailureCode = failureCode,
+                FailureMessage = failureMessage
+            },
+            ResultText = failureMessage,
+            ResultStatus = ToolResultStatuses.Failed,
+            FailureCode = failureCode,
+            FailureMessage = failureMessage
+        };
+    }
+
+    private static void CompleteMetaStepOutput(
+        MetaSkillStepDefinition step,
+        string output,
+        HashSet<string> pending,
+        Dictionary<string, string> outputs,
+        Dictionary<string, string> failureAliases)
+    {
+        outputs[step.Id] = output;
+        if (failureAliases.TryGetValue(step.Id, out var primaryStepId))
+            outputs[primaryStepId] = output;
+
+        pending.Remove(step.Id);
+    }
+
+    private static bool TryActivateFailureBranch(
+        MetaSkillStepDefinition step,
+        IReadOnlyDictionary<string, MetaSkillStepDefinition> stepById,
+        HashSet<string> pending,
+        HashSet<string> blocked,
+        Dictionary<string, string> failureAliases)
+    {
+        if (string.IsNullOrWhiteSpace(step.OnFailure))
+            return false;
+
+        var fallbackStepId = step.OnFailure.Trim();
+        if (!stepById.ContainsKey(fallbackStepId))
+            return false;
+
+        pending.Remove(step.Id);
+        blocked.Remove(fallbackStepId);
+        pending.Add(fallbackStepId);
+        failureAliases[fallbackStepId] = step.Id;
+        return true;
+    }
+
+    private static bool TryValidateMetaStepOutput(
+        MetaSkillStepDefinition step,
+        string output,
+        out string? failureCode)
+    {
+        failureCode = null;
+        var contract = step.OutputContract;
+        if (contract is null || string.IsNullOrWhiteSpace(contract.Format) || contract.Format.Equals("text", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!contract.Format.Equals("json", StringComparison.OrdinalIgnoreCase))
+        {
+            failureCode = "output_contract_failed";
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(output);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                failureCode = "output_contract_failed";
+                return false;
+            }
+
+            foreach (var requiredProperty in contract.RequiredProperties)
+            {
+                if (string.IsNullOrWhiteSpace(requiredProperty))
+                    continue;
+
+                if (!doc.RootElement.TryGetProperty(requiredProperty, out _))
+                {
+                    failureCode = "output_contract_failed";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            failureCode = "output_contract_failed";
+            return false;
+        }
+    }
+
+    private readonly record struct MetaLlmStepExecutionResult(LlmExecutionResult? ExecutionResult, string? FailureCode, string? FailureMessage)
+    {
+        public bool Completed => ExecutionResult is not null;
+
+        public static MetaLlmStepExecutionResult Succeeded(LlmExecutionResult executionResult)
+            => new(executionResult, null, null);
+
+        public static MetaLlmStepExecutionResult Failed(string failureCode, string failureMessage)
+            => new(null, failureCode, failureMessage);
     }
 
     private readonly record struct MetaStepExecutionResult(string Id, string Kind, string Status, string? FailureCode, double DurationMs, bool Continued);
@@ -2876,6 +3312,49 @@ public sealed class AgentRuntime : IAgentRuntime
                     error = $"Meta execution graph contains self-dependency on step '{step.Id}'.";
                     return false;
                 }
+            }
+        }
+
+        var stepById = steps.ToDictionary(static step => step.Id, StringComparer.OrdinalIgnoreCase);
+        var designatedFallbacks = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var fallbackTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var step in steps)
+        {
+            if (string.IsNullOrWhiteSpace(step.OnFailure))
+                continue;
+
+            if (string.Equals(step.Id, step.OnFailure, StringComparison.OrdinalIgnoreCase) ||
+                !stepById.TryGetValue(step.OnFailure, out var substitute))
+            {
+                error = $"Meta execution graph references invalid on_failure target '{step.OnFailure}' from step '{step.Id}'.";
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(substitute.OnFailure) || substitute.DependsOn.Count > 0)
+            {
+                error = $"Meta execution graph has invalid on_failure substitute '{substitute.Id}' from step '{step.Id}'.";
+                return false;
+            }
+
+            if (designatedFallbacks.TryGetValue(step.OnFailure, out var priorStep))
+            {
+                error = $"Meta execution graph fallback step '{step.OnFailure}' is shared by steps '{priorStep}' and '{step.Id}'.";
+                return false;
+            }
+
+            designatedFallbacks[step.OnFailure] = step.Id;
+            fallbackTargets.Add(step.OnFailure);
+        }
+
+        foreach (var step in steps)
+        {
+            foreach (var dependency in step.DependsOn)
+            {
+                if (!fallbackTargets.Contains(dependency))
+                    continue;
+
+                error = $"Meta execution graph step '{step.Id}' depends directly on fallback-only step '{dependency}'.";
+                return false;
             }
         }
 
