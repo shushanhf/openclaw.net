@@ -11,6 +11,7 @@
     <InternalsVisibleTo Include="OpenClaw.Tests" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Jinja2.NET" Version="1.4.1" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.3.0" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.3" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.3" />

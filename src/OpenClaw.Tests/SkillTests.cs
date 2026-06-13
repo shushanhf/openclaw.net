@@ -251,6 +251,121 @@ public class SkillLoaderTests
     }
 
     [Fact]
+    public void ParseSkillContent_MetaOpenSquillaDslFields_ParsesSuccessfully()
+    {
+        var content = """
+            ---
+            name: meta-opensquilla-native
+            description: Native DSL fields
+            kind: meta
+            composition: {"tool_args":{"trace_id":"{{ input }}","format":"json"},"steps":[{"id":"collect","kind":"user_input","clarify":{"mode":"form","extract_natural_language":true,"fields":[{"name":"topic","type":"string","required":true,"min_length":3,"max_length":32,"default":"bugs"},{"name":"size","type":"integer","min":1,"max":5,"default":3},{"name":"priority","type":"enum","options":["low","medium","high"],"default":"medium"}],"cancel_words":["cancel"],"timeout_seconds":30},"route":[{"when":"outputs.collect == 'bug'","to":"bug_branch"},{"to":"default_branch"}]},{"id":"bug_branch","kind":"tool_call","tool":"dispatch_bug","tool_allowlist":["dispatch_bug"],"tool_args":{"ticket":"{{ outputs.collect }}"},"output_choices":["accepted","rejected"]},{"id":"default_branch","kind":"llm_chat","when":"outputs.collect != ''"}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-opensquilla-native", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        Assert.Equal("{\"trace_id\":\"{{ input }}\",\"format\":\"json\"}", skill!.Composition!.ToolArgsJson);
+
+        var collect = skill.Composition.Steps[0];
+        Assert.Equal("form", collect.Clarify!.Mode);
+        Assert.True(collect.Clarify.ExtractNaturalLanguage);
+        Assert.Equal(["cancel"], collect.Clarify.CancelWords);
+        Assert.Equal(30, collect.Clarify.TimeoutSeconds);
+        Assert.Equal(3, collect.Clarify.Fields.Count);
+        Assert.Equal("topic", collect.Clarify.Fields[0].Name);
+        Assert.Equal("string", collect.Clarify.Fields[0].Type);
+        Assert.True(collect.Clarify.Fields[0].Required);
+        Assert.Equal(3, collect.Clarify.Fields[0].MinLength);
+        Assert.Equal(32, collect.Clarify.Fields[0].MaxLength);
+        Assert.Equal("size", collect.Clarify.Fields[1].Name);
+        Assert.Equal("integer", collect.Clarify.Fields[1].Type);
+        Assert.Equal(1, collect.Clarify.Fields[1].Min);
+        Assert.Equal(5, collect.Clarify.Fields[1].Max);
+        Assert.Equal(3, collect.Clarify.Fields[1].DefaultValue?.GetInt32());
+        Assert.Equal("priority", collect.Clarify.Fields[2].Name);
+        Assert.Equal("enum", collect.Clarify.Fields[2].Type);
+        Assert.Equal(["low", "medium", "high"], collect.Clarify.Fields[2].Options);
+        Assert.Equal("medium", collect.Clarify.Fields[2].DefaultValue?.GetString());
+        Assert.True(collect.Routes.Count == 2);
+        Assert.Equal("outputs.collect == 'bug'", collect.Routes[0].When);
+        Assert.Equal("bug_branch", collect.Routes[0].To);
+        Assert.Null(collect.Routes[1].When);
+        Assert.Equal("default_branch", collect.Routes[1].To);
+
+        var bugBranch = skill.Composition.Steps[1];
+        Assert.Equal("{\"ticket\":\"{{ outputs.collect }}\"}", bugBranch.ToolArgsJson);
+        Assert.Equal(["dispatch_bug"], bugBranch.ToolAllowlist);
+        Assert.Equal(["accepted", "rejected"], bugBranch.OutputChoices);
+
+        Assert.Equal("outputs.collect != ''", skill.Composition.Steps[2].When);
+    }
+
+    [Fact]
+    public void ParseSkillContent_MetaWithClarifyCompatibility_ParsesSuccessfully()
+    {
+        var content = """
+            ---
+            name: meta-with-clarify-compat
+            description: Legacy with.clarify remains supported
+            kind: meta
+            composition: {"steps":[{"id":"collect","kind":"user_input","with":{"clarify":{"mode":"form","fields":[{"name":"topic","type":"string","required":true}]}}}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-with-clarify-compat", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        var clarify = skill!.Composition!.Steps[0].Clarify;
+        Assert.NotNull(clarify);
+        Assert.Equal("form", clarify!.Mode);
+        Assert.Single(clarify.Fields);
+        Assert.Equal("topic", clarify.Fields[0].Name);
+    }
+
+    [Fact]
+    public void ParseSkillContent_MetaStepClarifyOverridesWithClarify_ParsesSuccessfully()
+    {
+        var content = """
+            ---
+            name: meta-step-clarify-wins
+            description: Step clarify wins over with.clarify
+            kind: meta
+            composition: {"steps":[{"id":"collect","kind":"user_input","clarify":{"mode":"chat"},"with":{"clarify":{"mode":"form","fields":[{"name":"topic","type":"string"}]}}}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-step-clarify-wins", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        var clarify = skill!.Composition!.Steps[0].Clarify;
+        Assert.NotNull(clarify);
+        Assert.Equal("chat", clarify!.Mode);
+        Assert.Empty(clarify.Fields);
+    }
+
+    [Fact]
+    public void ParseSkillContent_MetaRouteArrayWithMissingTarget_ReturnsNull()
+    {
+        var content = """
+            ---
+            name: meta-route-missing-target
+            description: Invalid route array target
+            kind: meta
+            composition: {"steps":[{"id":"collect","kind":"user_input","route":[{"to":"missing"}]},{"id":"next","kind":"llm_chat"}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-route-missing-target", SkillSource.Workspace);
+
+        Assert.Null(skill);
+    }
+
+    [Fact]
     public void TryParseSkillContent_MetaToolCallWithSkill_ReturnsDiagnosticCode()
     {
         var content = """
@@ -309,6 +424,130 @@ public class SkillLoaderTests
         Assert.False(ok);
         Assert.Null(skill);
         Assert.Equal("dependency_cycle", errorCode);
+    }
+
+    [Fact]
+    public void TryParseSkillContent_MetaStepWithNonObject_ReturnsDiagnosticCode()
+    {
+        var content = """
+            ---
+            name: meta-with-non-object-diag
+            description: Invalid step with payload
+            kind: meta
+            composition: {"steps":[{"id":"chat","kind":"llm_chat","with":"plain text"}]}
+            ---
+            Meta instructions.
+            """;
+
+        var ok = SkillLoader.TryParseSkillContent(content, "/skills/meta-with-non-object-diag", SkillSource.Workspace, out var skill, out var errorCode);
+
+        Assert.False(ok);
+        Assert.Null(skill);
+        Assert.Equal("invalid_with_payload", errorCode);
+    }
+
+    [Theory]
+    [InlineData("{\"tool_args\":[],\"steps\":[{\"id\":\"call\",\"kind\":\"tool_call\",\"tool\":\"search\"}]}", "invalid_tool_args")]
+    [InlineData("{\"steps\":[{\"id\":\"call\",\"kind\":\"tool_call\",\"tool\":\"search\",\"tool_args\":[]}]} ", "invalid_tool_args")]
+    [InlineData("{\"steps\":[{\"id\":\"chat\",\"kind\":\"llm_chat\",\"tool_args\":{\"q\":\"x\"}}]}", "invalid_tool_args")]
+    [InlineData("{\"steps\":[{\"id\":\"call\",\"kind\":\"tool_call\",\"tool\":\"search\",\"tool_allowlist\":\"search\"}]}", "invalid_tool_allowlist")]
+    [InlineData("{\"steps\":[{\"id\":\"call\",\"kind\":\"tool_call\",\"tool\":\"search\",\"tool_allowlist\":[]}]} ", "invalid_tool_allowlist")]
+    [InlineData("{\"steps\":[{\"id\":\"chat\",\"kind\":\"llm_chat\",\"tool_allowlist\":[\"search\"]}]}", "invalid_tool_allowlist")]
+    [InlineData("{\"steps\":[{\"id\":\"call\",\"kind\":\"tool_call\",\"tool\":\"search\",\"output_choices\":\"accepted\"}]}", "invalid_output_choices")]
+    [InlineData("{\"steps\":[{\"id\":\"call\",\"kind\":\"tool_call\",\"tool\":\"search\",\"output_choices\":[]}]} ", "invalid_output_choices")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"output_choices\":[\"accepted\"]}]}", "invalid_output_choices")]
+    [InlineData("{\"steps\":[{\"id\":\"chat\",\"kind\":\"llm_chat\",\"when\":1}]}", "invalid_when_expression")]
+    [InlineData("{\"steps\":[{\"id\":\"chat\",\"kind\":\"llm_chat\",\"when\":\"   \"}]}", "invalid_when_expression")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":[]}]} ", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":{\"mode\":\"modal\"}}]}", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":{\"extract_natural_language\":\"yes\"}}]}", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":{\"mode\":\"form\",\"fields\":[]}}]}", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":{\"mode\":\"form\",\"fields\":\"topic\"}}]}", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":{\"fields\":[{\"name\":\"topic\",\"type\":\"bogus\"}]}}]}", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":{\"fields\":[{\"name\":\"topic\",\"type\":\"string\",\"required\":\"yes\"}]}}]}", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":{\"fields\":[{\"name\":\"topic\",\"type\":\"string\",\"min_length\":10,\"max_length\":3}]}}]}", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":{\"fields\":[{\"name\":\"topic\",\"type\":\"string\"},{\"name\":\"topic\",\"type\":\"string\"}]}}]}", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":{\"fields\":[{\"name\":\"priority\",\"type\":\"enum\",\"options\":[\"low\",\"medium\"],\"default\":\"high\"}]}}]}", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":{\"fields\":[{\"name\":\"count\",\"type\":\"integer\",\"default\":\"1\"}]}}]}", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":{\"fields\":[{\"name\":\"count\",\"type\":\"integer\",\"min_length\":3}]}}]}", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"ask\",\"kind\":\"user_input\",\"clarify\":{\"fields\":[{\"name\":\"topic\",\"type\":\"string\",\"min\":1}]}}]}", "invalid_clarify_schema")]
+    [InlineData("{\"steps\":[{\"id\":\"route\",\"kind\":\"agent\",\"skill\":\"triage\",\"route\":{\"to\":\"next\"}},{\"id\":\"next\",\"kind\":\"llm_chat\"}]}", "invalid_route")]
+    [InlineData("{\"steps\":[{\"id\":\"route\",\"kind\":\"agent\",\"skill\":\"triage\",\"route\":[]},{\"id\":\"next\",\"kind\":\"llm_chat\"}]}", "invalid_route")]
+    [InlineData("{\"steps\":[{\"id\":\"route\",\"kind\":\"agent\",\"skill\":\"triage\",\"route\":[{\"when\":1,\"to\":\"next\"}]},{\"id\":\"next\",\"kind\":\"llm_chat\"}]}", "invalid_when_expression")]
+    [InlineData("{\"steps\":[{\"id\":\"route\",\"kind\":\"agent\",\"skill\":\"triage\",\"route\":[{\"when\":\"   \",\"to\":\"next\"}]},{\"id\":\"next\",\"kind\":\"llm_chat\"}]}", "invalid_when_expression")]
+    [InlineData("{\"steps\":[{\"id\":\"route\",\"kind\":\"agent\",\"skill\":\"triage\",\"route\":[{\"to\":\"missing\"}]},{\"id\":\"next\",\"kind\":\"llm_chat\"}]}", "invalid_route_target")]
+    [InlineData("{\"steps\":[{\"id\":\"route\",\"kind\":\"agent\",\"skill\":\"triage\",\"route\":[{\"to\":\"route\"}]},{\"id\":\"next\",\"kind\":\"llm_chat\"}]}", "invalid_route_scope")]
+    [InlineData("{\"steps\":[{\"id\":\"route\",\"kind\":\"agent\",\"skill\":\"triage\",\"route\":[{\"to\":\"first\"},{\"to\":\"second\"}]},{\"id\":\"first\",\"kind\":\"llm_chat\"},{\"id\":\"second\",\"kind\":\"llm_chat\"}]}", "invalid_route_fallback")]
+    [InlineData("{\"steps\":[{\"id\":\"route\",\"kind\":\"agent\",\"skill\":\"triage\",\"route\":[{\"to\":\"default\"},{\"when\":\"input == 'x'\",\"to\":\"specific\"}]},{\"id\":\"default\",\"kind\":\"llm_chat\"},{\"id\":\"specific\",\"kind\":\"llm_chat\"}]}", "invalid_route_fallback")]
+    [InlineData("{\"steps\":[{\"id\":\"classify\",\"kind\":\"llm_classify\",\"with\":{\"options\":[\"ok\"],\"route\":{\"ok\":\"next\"}},\"route\":[{\"to\":\"next\"}]},{\"id\":\"next\",\"kind\":\"llm_chat\"}]}", "invalid_route")]
+    public void TryParseSkillContent_MetaNativeDslDiagnostics_ReturnsExpectedCode(string compositionJson, string expectedError)
+    {
+        var content = $$"""
+            ---
+            name: meta-native-diagnostics
+            description: Invalid native fields
+            kind: meta
+            composition: {{compositionJson}}
+            ---
+            Meta instructions.
+            """;
+
+        var ok = SkillLoader.TryParseSkillContent(content, "/skills/meta-native-diagnostics", SkillSource.Workspace, out var skill, out var errorCode);
+
+        Assert.False(ok);
+        Assert.Null(skill);
+        Assert.Equal(expectedError, errorCode);
+    }
+
+    [Theory]
+    [InlineData("{\"steps\":[{\"id\":\"call\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"timeout_seconds\":0}]}", "invalid_step_timeout")]
+    [InlineData("{\"steps\":[{\"id\":\"call\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"retry\":{\"max_attempts\":0}}]}", "invalid_step_retry")]
+    [InlineData("{\"steps\":[{\"id\":\"call\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"retry\":{\"max_attempt\":3}}]}", "invalid_step_retry")]
+    [InlineData("{\"steps\":[{\"id\":\"draft\",\"kind\":\"llm_chat\",\"output_contract\":{\"format\":\"xml\"}}]}", "invalid_output_contract")]
+    [InlineData("{\"steps\":[{\"id\":\"draft\",\"kind\":\"llm_chat\",\"output_contract\":{\"required_properties\":[\"answer\"]}}]}", "invalid_output_contract")]
+    [InlineData("{\"steps\":[{\"id\":\"draft\",\"kind\":\"llm_chat\",\"output_contract\":{\"formats\":\"json\"}}]}", "invalid_output_contract")]
+    [InlineData("{\"steps\":[{\"id\":\"primary\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"   \"}]}", "invalid_on_failure")]
+    [InlineData("{\"steps\":[{\"id\":\"primary\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"fallback\"},{\"id\":\"fallback\",\"kind\":\"tool_call\",\"tool\":\"safe\",\"depends_on\":[\"primary\"]}]}", "invalid_on_failure")]
+    [InlineData("{\"steps\":[{\"id\":\"primary\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"fallback\"},{\"id\":\"fallback\",\"kind\":\"tool_call\",\"tool\":\"safe\"},{\"id\":\"router\",\"kind\":\"agent\",\"skill\":\"triage\",\"route\":[{\"to\":\"fallback\"}]}]}", "invalid_on_failure")]
+    [InlineData("{\"steps\":[{\"id\":\"primary\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"fallback\"},{\"id\":\"fallback\",\"kind\":\"tool_call\",\"tool\":\"safe\"},{\"id\":\"classify\",\"kind\":\"llm_classify\",\"with\":{\"options\":[\"ok\"],\"route\":{\"ok\":\"fallback\"}}}]}", "invalid_on_failure")]
+    [InlineData("{\"steps\":[{\"id\":\"route\",\"kind\":\"agent\",\"skill\":\"triage\",\"route\":[{\"target\":\"next\",\"to\":\"next\"}]},{\"id\":\"next\",\"kind\":\"llm_chat\"}]}", "invalid_route")]
+    public void TryParseSkillContent_MetaStepValidationDiagnostics_ReturnExpectedCode(string compositionJson, string expectedError)
+    {
+        var content = $$"""
+            ---
+            name: meta-step-validation-diagnostics
+            description: Invalid step validation fields
+            kind: meta
+            composition: {{compositionJson}}
+            ---
+            Meta instructions.
+            """;
+
+        var ok = SkillLoader.TryParseSkillContent(content, "/skills/meta-step-validation-diagnostics", SkillSource.Workspace, out var skill, out var errorCode);
+
+        Assert.False(ok);
+        Assert.Null(skill);
+        Assert.Equal(expectedError, errorCode);
+    }
+
+    [Fact]
+    public void ParseSkillContent_MetaClassifyLegacyRouteObjectMap_ParsesSuccessfully()
+    {
+        var content = """
+            ---
+            name: meta-classify-route-map
+            description: Legacy classify route object map remains supported
+            kind: meta
+            composition: {"steps":[{"id":"classify","kind":"llm_classify","with":{"options":["ok","retry"],"route":{"ok":"next","retry":["fallback"]}}},{"id":"next","kind":"llm_chat"},{"id":"fallback","kind":"llm_chat"}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-classify-route-map", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        Assert.Empty(skill!.Composition!.Steps[0].Routes);
+        Assert.Contains("\"route\":{\"ok\":\"next\",\"retry\":[\"fallback\"]}", skill.Composition.Steps[0].WithJson);
     }
 
     [Fact]
@@ -402,6 +641,24 @@ public class SkillLoaderTests
     }
 
     [Fact]
+    public void ParseSkillContent_MetaSkillExecWithoutEntrypoint_ReturnsNull()
+    {
+        var content = """
+            ---
+            name: meta-skill-exec-missing-entrypoint
+            description: Invalid skill_exec step without entrypoint
+            kind: meta
+            composition: {"steps":[{"id":"delegate","kind":"skill_exec","skill":"web-research"}]}
+            ---
+            Meta instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/meta-skill-exec-missing-entrypoint", SkillSource.Workspace);
+
+        Assert.Null(skill);
+    }
+
+    [Fact]
     public void ParseSkillContent_MetaSkillExecWithSkill_ParsesSuccessfully()
     {
         var content = """
@@ -409,7 +666,7 @@ public class SkillLoaderTests
             name: meta-skill-exec-valid
             description: Valid skill_exec step
             kind: meta
-            composition: {"steps":[{"id":"delegate","kind":"skill_exec","skill":"web-research"}]}
+            composition: {"steps":[{"id":"delegate","kind":"skill_exec","skill":"web-research","entrypoint":"report","args":["--format","json"],"stdin":"{{ input }}","cwd":"artifacts/meta","parse_mode":"json"}]}
             ---
             Meta instructions.
             """;
@@ -418,6 +675,11 @@ public class SkillLoaderTests
 
         Assert.NotNull(skill);
         Assert.Equal("web-research", skill!.Composition!.Steps[0].Skill);
+        Assert.Equal("report", skill.Composition.Steps[0].SkillExecEntrypoint);
+        Assert.Equal(["--format", "json"], skill.Composition.Steps[0].SkillExecArgs);
+        Assert.Equal("{{ input }}", skill.Composition.Steps[0].SkillExecStdin);
+        Assert.Equal("artifacts/meta", skill.Composition.Steps[0].SkillExecCwd);
+        Assert.Equal("json", skill.Composition.Steps[0].SkillExecParseMode);
     }
 
     [Fact]
@@ -483,7 +745,7 @@ public class SkillLoaderTests
             name: meta-skill-exec-without-tool
             description: Valid skill_exec step without tool
             kind: meta
-            composition: {"steps":[{"id":"delegate","kind":"skill_exec","skill":"web-research"}]}
+            composition: {"steps":[{"id":"delegate","kind":"skill_exec","skill":"web-research","entrypoint":"report"}]}
             ---
             Meta instructions.
             """;
@@ -492,6 +754,7 @@ public class SkillLoaderTests
 
         Assert.NotNull(skill);
         Assert.Equal("web-research", skill!.Composition!.Steps[0].Skill);
+        Assert.Equal("report", skill.Composition.Steps[0].SkillExecEntrypoint);
     }
 
     [Fact]

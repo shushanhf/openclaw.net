@@ -129,8 +129,6 @@ internal static partial class RuntimeInitializationExtensions
         var skills = SkillLoader.LoadAll(config.Skills, startup.WorkspacePath, skillLogger, combinedPluginSkillRoots);
         if (skills.Count > 0)
             skillLogger.LogInformation("{Summary}", SkillPromptBuilder.BuildSummary(skills));
-
-        // Progressive disclosure: closure picks up runtimeForLoadSkill (set below) for hot reload.
         IAgentRuntime? runtimeForLoadSkill = null;
         Func<IReadOnlyList<SkillDefinition>> skillsProvider = () => runtimeForLoadSkill?.LoadedSkills ?? skills;
         tools =
@@ -171,20 +169,14 @@ internal static partial class RuntimeInitializationExtensions
             effectiveRequireToolApproval,
             effectiveApprovalRequiredTools,
             services.ToolSandbox);
-
-        // Wire the LoadSkillTool/ReadSkillResourceTool closures to the live runtime so
-        // hot-reloaded skills resolve through runtime.LoadedSkills.
         runtimeForLoadSkill = agentRuntime;
 
         if (agentRuntime is AgentRuntime concreteRuntime)
         {
-            // Wire compact callback so /compact command can trigger LLM-powered compaction.
             services.CommandProcessor.SetCompactCallback(async (session, ct) =>
             {
-                var countBefore = session.History.Count;
                 await concreteRuntime.CompactHistoryAsync(session, ct);
-                var countAfter = session.History.Count;
-                return countAfter; // Return actual remaining turn count
+                return session.History.Count;
             });
         }
 
@@ -226,8 +218,6 @@ internal static partial class RuntimeInitializationExtensions
             pluginComposition.NativeDynamicPluginHost);
 
         await profile.OnRuntimeInitializedAsync(app, startup, runtime);
-
-        // Start integration services
         if (config.Tailscale.Enabled)
         {
             var tailscale = new Integrations.TailscaleService(
@@ -251,5 +241,4 @@ internal static partial class RuntimeInitializationExtensions
 
         return runtime;
     }
-
 }

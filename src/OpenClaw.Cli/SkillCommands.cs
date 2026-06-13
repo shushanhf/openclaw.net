@@ -1,4 +1,8 @@
 using System.Diagnostics;
+using System.Text.Json;
+using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Memory;
+using OpenClaw.Core.Models;
 using OpenClaw.Core.Skills;
 
 namespace OpenClaw.Cli;
@@ -23,8 +27,215 @@ internal static class SkillCommands
             "inspect" => await InspectAsync(rest),
             "install" => await InstallAsync(rest),
             "list" or "ls" => ListInstalled(rest),
+            "meta-runs" => await ListMetaRunsAsync(rest),
             _ => UnknownSubcommand(subcommand)
         };
+    }
+
+    private static async Task<int> ListMetaRunsAsync(string[] args)
+    {
+        if (args.Length > 0 && string.Equals(args[0], "replay", StringComparison.OrdinalIgnoreCase))
+            return await PreviewMetaRunReplayAsync(args.Skip(1).ToArray());
+
+        var asJson = args.Contains("--json");
+        var verbose = args.Contains("--verbose");
+        var requestedRunId = GetOptionValue(args, "--run");
+        var sessionId = args.FirstOrDefault(arg => !arg.StartsWith("-", StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            Console.Error.WriteLine("Usage: openclaw skills meta-runs <session-id> [--storage <path>] [--limit <count>] [--run <run-id>] [--verbose] [--json]");
+            return 2;
+        }
+
+        var storagePath = GetOptionValue(args, "--storage");
+        var limit = ParseIntOption(args, "--limit") ?? 20;
+        limit = Math.Clamp(limit, 1, 100);
+
+        var store = OpenMemoryStore(storagePath);
+        try
+        {
+            var session = await store.GetSessionAsync(sessionId, CancellationToken.None);
+            if (session is null)
+            {
+                Console.Error.WriteLine($"Session '{sessionId}' not found.");
+                return 1;
+            }
+
+            if (session.MetaRunHistory.Count == 0)
+            {
+                if (asJson)
+                {
+                    WriteMetaRunsJson(sessionId, session.MetaRunHistory.Count, []);
+                    return 0;
+                }
+
+                Console.WriteLine($"Session: {sessionId}");
+                Console.WriteLine("Meta runs: 0");
+                return 0;
+            }
+
+            var runs = session.MetaRunHistory
+                .Where(run => string.IsNullOrWhiteSpace(requestedRunId) || string.Equals(run.RunId, requestedRunId, StringComparison.Ordinal))
+                .OrderByDescending(static run => run.CompletedAtUtc)
+                .Take(limit)
+                .ToArray();
+
+            if (!string.IsNullOrWhiteSpace(requestedRunId) && runs.Length == 0)
+            {
+                Console.Error.WriteLine($"Run '{requestedRunId}' not found in session '{sessionId}'.");
+                return 1;
+            }
+
+            if (asJson)
+            {
+                WriteMetaRunsJson(sessionId, session.MetaRunHistory.Count, runs);
+                return 0;
+            }
+
+            Console.WriteLine($"Session: {sessionId}");
+            Console.WriteLine($"Meta runs: {session.MetaRunHistory.Count} total, showing {runs.Length}");
+            Console.WriteLine();
+
+            foreach (var run in runs)
+            {
+                Console.WriteLine($"Run: {run.RunId}");
+                Console.WriteLine($"Skill: {run.SkillName}");
+                Console.WriteLine($"Status: {run.Status}");
+                Console.WriteLine($"Started: {run.StartedAtUtc:O}");
+                Console.WriteLine($"Completed: {run.CompletedAtUtc:O}");
+                Console.WriteLine($"Steps: {run.StepResults.Count}");
+                if (!string.IsNullOrWhiteSpace(run.ErrorCode))
+                    Console.WriteLine($"Error code: {run.ErrorCode}");
+                if (!string.IsNullOrWhiteSpace(run.Error))
+                    Console.WriteLine($"Error: {run.Error}");
+                if (!string.IsNullOrWhiteSpace(run.FinalText))
+                    Console.WriteLine($"Final text: {run.FinalText}");
+
+                if (verbose)
+                {
+                    foreach (var step in run.StepResults)
+                    {
+                        var line = $"- Step: {step.Id} | kind={step.Kind} | status={step.Status} | duration_ms={step.DurationMs:0.###}";
+                        if (!string.IsNullOrWhiteSpace(step.FailureCode))
+                            line += $" | failure_code={step.FailureCode}";
+                        if (step.Continued)
+                            line += " | continued=true";
+                        Console.WriteLine(line);
+                    }
+
+                    Console.WriteLine();
+                }
+                else
+                {
+                    Console.WriteLine();
+                }
+            }
+
+            return 0;
+        }
+        finally
+        {
+            switch (store)
+            {
+                case IAsyncDisposable asyncDisposable:
+                    await asyncDisposable.DisposeAsync();
+                    break;
+                case IDisposable disposable:
+                    disposable.Dispose();
+                    break;
+            }
+        }
+    }
+
+    private static async Task<int> PreviewMetaRunReplayAsync(string[] args)
+    {
+        var asJson = args.Contains("--json");
+        var sessionId = args.FirstOrDefault(arg => !arg.StartsWith("-", StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            Console.Error.WriteLine("Usage: openclaw skills meta-runs replay <session-id> --run <run-id> [--storage <path>] [--json]");
+            return 2;
+        }
+
+        var requestedRunId = GetOptionValue(args, "--run");
+        if (string.IsNullOrWhiteSpace(requestedRunId))
+        {
+            Console.Error.WriteLine("--run <run-id> is required for meta-runs replay preview.");
+            return 2;
+        }
+
+        var storagePath = GetOptionValue(args, "--storage");
+        var store = OpenMemoryStore(storagePath);
+        try
+        {
+            var session = await store.GetSessionAsync(sessionId, CancellationToken.None);
+            if (session is null)
+            {
+                Console.Error.WriteLine($"Session '{sessionId}' not found.");
+                return 1;
+            }
+
+            var run = session.MetaRunHistory.FirstOrDefault(run => string.Equals(run.RunId, requestedRunId, StringComparison.Ordinal));
+            if (run is null)
+            {
+                Console.Error.WriteLine($"Run '{requestedRunId}' not found in session '{sessionId}'.");
+                return 1;
+            }
+
+            var preview = BuildReplayPreview(sessionId, run);
+            if (asJson)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(preview, CoreJsonContext.Default.MetaRunReplayPreviewResponse));
+            }
+            else
+            {
+                Console.WriteLine($"Replay preview for run: {preview.RunId}");
+                Console.WriteLine($"Session: {preview.SessionId}");
+                Console.WriteLine($"Skill: {preview.SkillName}");
+                Console.WriteLine(preview.ReplayAvailable ? "Replay available: yes" : "Replay available: no");
+                Console.WriteLine($"Reason: {preview.Reason}");
+                Console.WriteLine("Replay plan:");
+                Console.WriteLine($"Summary: {preview.Plan.Summary}");
+                Console.WriteLine($"Mode: {preview.Plan.Mode}");
+                Console.WriteLine(preview.Plan.Executable ? "Executable: yes" : "Executable: no");
+                if (preview.Plan.ReplayableSteps.Length > 0)
+                    Console.WriteLine($"Replayable steps: {string.Join(", ", preview.Plan.ReplayableSteps.Select(static item => $"{item.Id} | readiness={item.Readiness} | reason={item.Reason}"))}");
+                if (preview.Plan.BlockedByRequirements.Length > 0)
+                    Console.WriteLine($"Blocked by requirements: {string.Join(", ", preview.Plan.BlockedByRequirements.Select(FormatReplayRequirement))}");
+                if (preview.AvailableArtifacts.Length > 0)
+                {
+                    Console.WriteLine("Available artifacts:");
+                    foreach (var item in preview.AvailableArtifacts)
+                        Console.WriteLine($"- {item}");
+                }
+                if (preview.RetainedSteps.Length > 0)
+                {
+                    Console.WriteLine("Retained steps:");
+                    foreach (var step in preview.RetainedSteps)
+                        Console.WriteLine(FormatReplayRetainedStep(step));
+                }
+                if (preview.MissingRequirements.Length > 0)
+                {
+                    Console.WriteLine("Missing replay inputs:");
+                    foreach (var item in preview.MissingRequirements)
+                        Console.WriteLine($"- {FormatReplayRequirement(item)}");
+                }
+            }
+
+            return 1;
+        }
+        finally
+        {
+            switch (store)
+            {
+                case IAsyncDisposable asyncDisposable:
+                    await asyncDisposable.DisposeAsync();
+                    break;
+                case IDisposable disposable:
+                    disposable.Dispose();
+                    break;
+            }
+        }
     }
 
     private static Task<int> InspectAsync(string[] args)
@@ -294,6 +505,41 @@ internal static class SkillCommands
         return null;
     }
 
+    private static int? ParseIntOption(string[] args, string optionName)
+    {
+        var value = GetOptionValue(args, optionName);
+        return int.TryParse(value, out var parsed) ? parsed : null;
+    }
+
+    private static IMemoryStore OpenMemoryStore(string? storagePath)
+    {
+        var resolved = ResolveMemoryPath(storagePath);
+        if (LooksLikeSqlitePath(resolved))
+            return new SqliteMemoryStore(resolved, enableFts: false);
+
+        return new FileMemoryStore(resolved);
+    }
+
+    private static string ResolveMemoryPath(string? storagePath)
+    {
+        if (!string.IsNullOrWhiteSpace(storagePath))
+            return Path.GetFullPath(storagePath);
+
+        var workspace = Environment.GetEnvironmentVariable(EnvWorkspace);
+        if (!string.IsNullOrWhiteSpace(workspace))
+            return Path.Combine(Path.GetFullPath(workspace), "memory");
+
+        return Path.GetFullPath("./memory");
+    }
+
+    private static bool LooksLikeSqlitePath(string path)
+    {
+        var extension = Path.GetExtension(path);
+        return extension.Equals(".db", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".sqlite", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".sqlite3", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static void CopyDirectory(string source, string destination)
     {
         ThrowIfReparsePoint(new DirectoryInfo(source));
@@ -380,12 +626,196 @@ internal static class SkillCommands
               openclaw skills inspect <path|tarball>
               openclaw skills install <path|tarball> [--dry-run] [--workdir <path> | --managed]
               openclaw skills list [--workdir <path> | --managed]
+                            openclaw skills meta-runs <session-id> [--storage <path>] [--limit <count>] [--run <run-id>] [--verbose] [--json]
+                            openclaw skills meta-runs replay <session-id> --run <run-id> [--storage <path>] [--json]
 
             Notes:
               - Remote registry installs still go through `openclaw clawhub`.
               - `install --dry-run` prints trust and requirement details without copying files.
+                            - `meta-runs` reads persisted local session state from `./memory`, `$OPENCLAW_WORKSPACE/memory`, or `--storage`.
+                            - `meta-runs --run <run-id>` limits output to one persisted run inside the session history.
+                            - `meta-runs --verbose` expands per-step trace summaries for each persisted run.
+                            - `meta-runs --json` emits machine-readable output for operators and scripts.
+                            - `meta-runs replay` is currently preview-only and reports whether persisted run history is sufficient for replay.
             """);
     }
+
+        private static void WriteMetaRunsJson(string sessionId, int totalCount, IReadOnlyList<SessionMetaRunRecord> runs)
+        {
+                using var stream = new MemoryStream();
+                using (var writer = new Utf8JsonWriter(stream))
+                {
+                        writer.WriteStartObject();
+                        writer.WriteString("sessionId", sessionId);
+                        writer.WriteNumber("totalCount", totalCount);
+                        writer.WriteNumber("shownCount", runs.Count);
+                        writer.WritePropertyName("runs");
+                        writer.WriteStartArray();
+                        foreach (var run in runs)
+                                JsonSerializer.Serialize(writer, run, CoreJsonContext.Default.SessionMetaRunRecord);
+                        writer.WriteEndArray();
+                        writer.WriteEndObject();
+                }
+
+                Console.WriteLine(System.Text.Encoding.UTF8.GetString(stream.ToArray()));
+        }
+
+    private static MetaRunReplayPreviewResponse BuildReplayPreview(string sessionId, SessionMetaRunRecord run)
+    {
+        var missingRequirements = GetReplayMissingRequirements(run);
+        return new MetaRunReplayPreviewResponse
+        {
+            SessionId = sessionId,
+            RunId = run.RunId,
+            SkillName = run.SkillName,
+            ReplayAvailable = false,
+            Reason = MetaRunReplayReasons.NotEnoughInputsForExecutableReplay,
+            AvailableArtifacts = GetReplayAvailableArtifacts(run),
+            RetainedSteps = GetReplayRetainedSteps(run),
+            Plan = GetReplayPlan(run, missingRequirements),
+            MissingRequirements = missingRequirements
+        };
+    }
+
+    private static string FormatReplayRequirement(MetaRunReplayRequirementPreview requirement)
+        => $"{requirement.Name} | kind={requirement.Kind} | reason={requirement.Reason}";
+
+    private static string FormatReplayRetainedStep(MetaRunReplayStepPreview step)
+    {
+        var line = $"- {step.Id} | kind={step.Kind} | status={step.Status} | duration_ms={step.DurationMs:0.###}";
+        if (!string.IsNullOrWhiteSpace(step.FailureCode))
+            line += $" | failure_code={step.FailureCode}";
+        if (step.Continued)
+            line += " | continued=true";
+
+        return line;
+    }
+
+    private static string[] GetReplayAvailableArtifacts(SessionMetaRunRecord run)
+    {
+        var artifacts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(run.FinalText))
+            artifacts.Add(MetaRunReplayArtifactNames.FinalText);
+        if (!string.IsNullOrWhiteSpace(run.ErrorCode))
+            artifacts.Add(MetaRunReplayArtifactNames.ErrorCode);
+        if (!string.IsNullOrWhiteSpace(run.Error))
+            artifacts.Add(MetaRunReplayArtifactNames.ErrorMessage);
+        if (HasRetainedSteps(run))
+            artifacts.Add(MetaRunReplayArtifactNames.StepResults);
+
+        return [.. artifacts];
+    }
+
+    private static MetaRunReplayRequirementPreview[] GetReplayMissingRequirements(SessionMetaRunRecord run)
+    {
+        var requirements = new List<MetaRunReplayRequirementPreview>
+        {
+            new()
+            {
+                Name = MetaRunReplayRequirementNames.PromptContext,
+                Kind = MetaRunReplayRequirementKinds.NotPersisted,
+                Reason = MetaRunReplayRequirementReasons.PromptContextNotPersisted
+            },
+            new()
+            {
+                Name = MetaRunReplayRequirementNames.StepInputs,
+                Kind = MetaRunReplayRequirementKinds.NotPersisted,
+                Reason = MetaRunReplayRequirementReasons.StepInputsNotPersisted
+            },
+            new()
+            {
+                Name = MetaRunReplayRequirementNames.ToolArguments,
+                Kind = MetaRunReplayRequirementKinds.NotPersisted,
+                Reason = MetaRunReplayRequirementReasons.ToolArgumentsNotPersisted
+            }
+        };
+
+        if (!HasRetainedSteps(run))
+        {
+            requirements.Add(new MetaRunReplayRequirementPreview
+            {
+                Name = MetaRunReplayRequirementNames.StepResults,
+                Kind = MetaRunReplayRequirementKinds.NotRetained,
+                Reason = MetaRunReplayRequirementReasons.StepResultsNotRetained
+            });
+        }
+
+        return [.. requirements];
+    }
+
+    private static MetaRunReplayStepPreview[] GetReplayRetainedSteps(SessionMetaRunRecord run)
+        => [.. run.StepResults.Select(static step => new MetaRunReplayStepPreview
+        {
+            Id = step.Id,
+            Kind = step.Kind,
+            Status = step.Status,
+            FailureCode = step.FailureCode,
+            DurationMs = step.DurationMs,
+            Continued = step.Continued
+        })];
+
+    private static MetaRunReplayPlanPreview GetReplayPlan(SessionMetaRunRecord run, MetaRunReplayRequirementPreview[] missingRequirements)
+    {
+        return new MetaRunReplayPlanPreview
+        {
+            Summary = GetReplayPlanSummary(run),
+            Mode = MetaRunReplayModes.PreviewOnly,
+            Executable = false,
+            ReplayableSteps = [.. run.StepResults.Select(GetReplayStepReadiness)],
+            BlockedByRequirements = missingRequirements
+        };
+    }
+
+    private static MetaRunReplayStepReadinessPreview GetReplayStepReadiness(SessionMetaStepResult step)
+    {
+        if ((string.Equals(step.Status, "failed", StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrWhiteSpace(step.FailureCode))
+            && step.Continued)
+        {
+            return new MetaRunReplayStepReadinessPreview
+            {
+                Id = step.Id,
+                Readiness = MetaRunReplayStepReadinessKinds.FailureTraceContinued,
+                Reason = MetaRunReplayStepReadinessReasons.FailureTraceContinued
+            };
+        }
+
+        if (string.Equals(step.Status, "failed", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(step.FailureCode))
+        {
+            return new MetaRunReplayStepReadinessPreview
+            {
+                Id = step.Id,
+                Readiness = MetaRunReplayStepReadinessKinds.FailureTraceOnly,
+                Reason = MetaRunReplayStepReadinessReasons.FailureTraceOnly
+            };
+        }
+
+        if (step.Continued)
+        {
+            return new MetaRunReplayStepReadinessPreview
+            {
+                Id = step.Id,
+                Readiness = MetaRunReplayStepReadinessKinds.ContinuationTraceOnly,
+                Reason = MetaRunReplayStepReadinessReasons.ContinuationTraceOnly
+            };
+        }
+
+        return new MetaRunReplayStepReadinessPreview
+        {
+            Id = step.Id,
+            Readiness = MetaRunReplayStepReadinessKinds.TraceOnly,
+            Reason = MetaRunReplayStepReadinessReasons.TraceOnly
+        };
+    }
+
+    private static string GetReplayPlanSummary(SessionMetaRunRecord run)
+        => HasRetainedSteps(run)
+            ? MetaRunReplayPlanSummaries.AuditableNotReplayable
+            : MetaRunReplayPlanSummaries.MetadataOnlyNotReplayable;
+
+    private static bool HasRetainedSteps(SessionMetaRunRecord run)
+        => run.StepResults.Count > 0;
 
     internal sealed class SkillCommandInspection
     {

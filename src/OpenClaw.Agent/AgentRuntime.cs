@@ -68,6 +68,7 @@ public sealed class AgentRuntime : IAgentRuntime
     private readonly Action<Session, string, string, long, long>? _recordContractTurnUsage;
     private readonly Action<Session, string>? _appendContractSnapshot;
     private readonly SkillsConfig? _skillsConfig;
+    private readonly bool _metaSkillsEnabled;
     private readonly string? _skillWorkspacePath;
     private readonly IReadOnlyList<string> _pluginSkillDirs;
     private readonly IRedactionPipeline _redaction;
@@ -148,6 +149,7 @@ public sealed class AgentRuntime : IAgentRuntime
         _providerUsage = providerUsage;
         _llmExecutionService = llmExecutionService;
         _skillsConfig = skillsConfig;
+        _metaSkillsEnabled = skillsConfig?.MetaSkill.Enabled ?? true;
         _skillWorkspacePath = skillWorkspacePath;
         _pluginSkillDirs = pluginSkillDirs ?? [];
         _redaction = redaction ?? new NoopRedactionPipeline();
@@ -1948,6 +1950,9 @@ public sealed class AgentRuntime : IAgentRuntime
 
     private string? BuildMetaRoutingSuffix(string userMessage)
     {
+        if (!_metaSkillsEnabled)
+            return null;
+
         if (string.IsNullOrWhiteSpace(userMessage))
             return null;
 
@@ -1965,6 +1970,9 @@ public sealed class AgentRuntime : IAgentRuntime
 
     private async Task<string> ExecuteMetaSkillAsync(Session session, string skillName, string? input, CancellationToken ct)
     {
+        if (!_metaSkillsEnabled)
+            return "Error: Meta skill invocation is disabled by runtime policy.";
+
         var metaSkill = LoadedSkills.FirstOrDefault(skill =>
             skill.Kind == SkillKind.Meta &&
             !skill.DisableModelInvocation &&
@@ -1978,7 +1986,7 @@ public sealed class AgentRuntime : IAgentRuntime
             return $"Error: Meta skill '{metaSkill.Name}' has no executable composition steps.";
 
         if (!TryValidateMetaPlan(steps, out var validationError))
-            return BuildMetaExecutionOutput(metaSkill, finalText: null, stepResults: [], validationError);
+            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults: [], validationError, preserveCheckpoint: false);
 
         var stepById = steps.ToDictionary(static step => step.Id, StringComparer.OrdinalIgnoreCase);
         var failureBranchTargets = steps
@@ -2003,13 +2011,36 @@ public sealed class AgentRuntime : IAgentRuntime
             out var waitingPrompt);
         if (resumedFromCheckpoint)
         {
-            if (string.IsNullOrWhiteSpace(input))
+            var timeoutHandledByFailureBranch = false;
+            var resumedStepId = session.MetaExecutionCheckpoint?.PendingStepId;
+            var resumedStep = string.IsNullOrWhiteSpace(resumedStepId)
+                ? null
+                : steps.FirstOrDefault(step => string.Equals(step.Id, resumedStepId, StringComparison.OrdinalIgnoreCase));
+
+            if (string.IsNullOrWhiteSpace(input) && resumedStep is not null && IsClarifyInputTimedOut(session, metaSkill.Name, resumedStep))
             {
-                return BuildMetaExecutionOutput(
+                stepResults.Add(new MetaStepExecutionResult(resumedStep.Id, resumedStep.Kind, ToolResultStatuses.Failed, "user_input_timeout", 0, Continued: false));
+
+                if (TryActivateFailureBranch(resumedStep, stepById, pending, blocked, failureAliases))
+                {
+                    ClearMetaExecutionCheckpoint(session, metaSkill.Name);
+                    timeoutHandledByFailureBranch = true;
+                }
+                else
+                {
+                    return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{resumedStep.Id}' clarify input timed out.", preserveCheckpoint: false);
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(input) && !timeoutHandledByFailureBranch)
+            {
+                return ReturnMetaExecutionOutput(
+                    session,
                     metaSkill,
                     finalText: null,
                     stepResults,
-                    waitingPrompt ?? "Meta execution is waiting for user input to continue.");
+                    waitingPrompt ?? "Meta execution is waiting for user input to continue.",
+                    preserveCheckpoint: true);
             }
         }
         var turnCtx = new TurnContext
@@ -2017,6 +2048,14 @@ public sealed class AgentRuntime : IAgentRuntime
             SessionId = session.Id,
             ChannelId = session.ChannelId
         };
+        var templateRenderer = new MetaTemplateRenderer();
+        var conditionEvaluator = new MetaConditionEvaluator(templateRenderer);
+        var toolArgumentResolver = new MetaToolArgumentResolver(templateRenderer);
+        var clarifyValidator = new MetaClarifyValidator();
+        var routePlanner = new MetaRoutePlanner(conditionEvaluator);
+
+        if (!resumedFromCheckpoint)
+            routePlanner.ApplyInitialRoutingBlocks(steps, blocked, pending);
 
         while (pending.Count > 0)
         {
@@ -2062,11 +2101,44 @@ public sealed class AgentRuntime : IAgentRuntime
                     continue;
 
                 var stepArgs = DeserializeStepArgs(step.WithJson);
-                var stepInput = ResolveMetaTemplate(
-                    GetOptionalString(stepArgs, "input") ?? input ?? string.Empty,
-                    input,
-                    outputs);
+                var metaContext = new MetaExecutionContext(input, outputs);
                 var continueOnError = GetOptionalBoolean(stepArgs, "continue_on_error") ?? false;
+
+                if (!string.IsNullOrWhiteSpace(step.When) && !conditionEvaluator.Evaluate(step.When, metaContext))
+                {
+                    BlockStepAndDependents(step.Id, blocked, pending, dependentsByStep);
+                    stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Blocked, "condition_false", 0, Continued: false));
+                    progress = true;
+                    continue;
+                }
+
+                string stepInput;
+                try
+                {
+                    stepInput = templateRenderer.Render(
+                        GetOptionalString(stepArgs, "input") ?? input ?? string.Empty,
+                        metaContext);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "template_render_failed", 0, Continued: continueOnError));
+
+                    if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                    {
+                        progress = true;
+                        continue;
+                    }
+
+                    if (!continueOnError)
+                    {
+                        return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' template render failed: {ex.Message}", preserveCheckpoint: false);
+                    }
+
+                    CompleteMetaStepOutput(step, string.Empty, pending, outputs, failureAliases);
+                    routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                    progress = true;
+                    continue;
+                }
 
                 switch (NormalizeMetaStepKind(step.Kind))
                 {
@@ -2075,11 +2147,13 @@ public sealed class AgentRuntime : IAgentRuntime
                         var toolName = step.Tool;
                         if (string.IsNullOrWhiteSpace(toolName))
                         {
-                            return BuildMetaExecutionOutput(
-                                metaSkill,
-                                finalText: null,
-                                stepResults,
-                                $"Meta step '{step.Id}' is 'tool_call' but does not declare a tool.");
+                            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' is 'tool_call' but does not declare a tool.", preserveCheckpoint: false);
+                        }
+
+                        if (step.ToolAllowlist.Count > 0 && !step.ToolAllowlist.Contains(toolName, StringComparer.OrdinalIgnoreCase))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Blocked, "tool_not_allowlisted", 0, Continued: false));
+                            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' tool '{toolName}' is not allowlisted.", preserveCheckpoint: false);
                         }
 
                             if (!IsToolAllowedByMetaCapabilities(metaSkill, toolName))
@@ -2087,16 +2161,22 @@ public sealed class AgentRuntime : IAgentRuntime
                                 pending.Remove(step.Id);
                                 progress = true;
                                 stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Blocked, "metadata_capability_denied", 0, Continued: false));
-                                return BuildMetaExecutionOutput(
-                                metaSkill,
-                                finalText: null,
-                                stepResults,
-                                $"Meta step '{step.Id}' tool '{toolName}' is not permitted by metadata capabilities.");
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' tool '{toolName}' is not permitted by metadata capabilities.", preserveCheckpoint: false);
                             }
 
-                        var toolArgsJson = string.IsNullOrWhiteSpace(step.WithJson)
-                            ? "{}"
-                            : RewriteMetaTemplateJson(step.WithJson!, input, outputs);
+                        string toolArgsJson;
+                        try
+                        {
+                            toolArgsJson = toolArgumentResolver.Resolve(
+                                metaSkill.Composition?.ToolArgsJson,
+                                step.WithJson,
+                                step.ToolArgsJson,
+                                metaContext);
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' declared invalid tool arguments.", preserveCheckpoint: false);
+                        }
 
                         var stepSw = Stopwatch.StartNew();
                         var toolResult = await ExecuteMetaToolStepWithPolicyAsync(
@@ -2129,6 +2209,7 @@ public sealed class AgentRuntime : IAgentRuntime
                         if (completed)
                         {
                             CompleteMetaStepOutput(step, toolResult.ResultText, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
                             progress = true;
                             break;
                         }
@@ -2141,21 +2222,183 @@ public sealed class AgentRuntime : IAgentRuntime
 
                         if (!continueOnError)
                         {
-                            return BuildMetaExecutionOutput(
-                                metaSkill,
-                                finalText: null,
-                                stepResults,
-                                $"Meta step '{step.Id}' failed with status '{toolResult.ResultStatus}'.");
+                            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' failed with status '{toolResult.ResultStatus}'.", preserveCheckpoint: false);
                         }
 
                         CompleteMetaStepOutput(step, toolResult.ResultText, pending, outputs, failureAliases);
+                        routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
                         progress = true;
 
                         break;
                     }
 
-                    case "agent":
                     case "skill_exec":
+                    {
+                        var delegatedSkill = !string.IsNullOrWhiteSpace(step.Skill)
+                            ? LoadedSkills.FirstOrDefault(skill =>
+                                string.Equals(skill.Name, step.Skill, StringComparison.OrdinalIgnoreCase))
+                            : null;
+
+                        if (delegatedSkill is null)
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "skill_not_found", 0, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' references missing skill '{step.Skill}'.", preserveCheckpoint: false);
+                            }
+
+                            CompleteMetaStepOutput(step, string.Empty, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        var renderedArgs = new List<string>(step.SkillExecArgs.Count);
+                        try
+                        {
+                            var argumentContext = new MetaExecutionContext(input, outputs);
+                            foreach (var argument in step.SkillExecArgs)
+                                renderedArgs.Add(templateRenderer.Render(argument, argumentContext));
+                        }
+                        catch (Exception ex)
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "template_render_failed", 0, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' template render failed: {ex.Message}", preserveCheckpoint: false);
+                            }
+
+                            CompleteMetaStepOutput(step, ex.Message, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        var renderedCwd = step.SkillExecCwd;
+                        if (!string.IsNullOrWhiteSpace(renderedCwd))
+                        {
+                            try
+                            {
+                                renderedCwd = templateRenderer.Render(renderedCwd, new MetaExecutionContext(input, outputs));
+                            }
+                            catch (Exception ex)
+                            {
+                                stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "template_render_failed", 0, Continued: continueOnError));
+
+                                if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                                {
+                                    progress = true;
+                                    break;
+                                }
+
+                                if (!continueOnError)
+                                {
+                                    return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' template render failed: {ex.Message}", preserveCheckpoint: false);
+                                }
+
+                                CompleteMetaStepOutput(step, ex.Message, pending, outputs, failureAliases);
+                                routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                                progress = true;
+                                break;
+                            }
+                        }
+
+                        var renderedStdin = step.SkillExecStdin;
+                        if (!string.IsNullOrWhiteSpace(renderedStdin))
+                        {
+                            try
+                            {
+                                renderedStdin = templateRenderer.Render(renderedStdin, new MetaExecutionContext(input, outputs));
+                            }
+                            catch (Exception ex)
+                            {
+                                stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "template_render_failed", 0, Continued: continueOnError));
+
+                                if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                                {
+                                    progress = true;
+                                    break;
+                                }
+
+                                if (!continueOnError)
+                                {
+                                    return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' template render failed: {ex.Message}", preserveCheckpoint: false);
+                                }
+
+                                CompleteMetaStepOutput(step, ex.Message, pending, outputs, failureAliases);
+                                routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                                progress = true;
+                                break;
+                            }
+                        }
+
+                        var stepSw = Stopwatch.StartNew();
+                        var skillExecResult = await ExecuteMetaSkillExecStepWithPolicyAsync(
+                            delegatedSkill,
+                            step,
+                            renderedArgs,
+                            renderedCwd,
+                            renderedStdin,
+                            ct);
+                        stepSw.Stop();
+
+                        var completed = string.Equals(skillExecResult.ResultStatus, ToolResultStatuses.Completed, StringComparison.Ordinal);
+                        var resultStatus = skillExecResult.ResultStatus;
+                        var failureCode = skillExecResult.FailureCode;
+                        if (completed && !TryValidateMetaStepOutput(step, skillExecResult.ResultText, out failureCode))
+                        {
+                            completed = false;
+                            resultStatus = ToolResultStatuses.Failed;
+                        }
+
+                        stepResults.Add(new MetaStepExecutionResult(
+                            step.Id,
+                            step.Kind,
+                            resultStatus,
+                            failureCode,
+                            stepSw.Elapsed.TotalMilliseconds,
+                            Continued: !completed && continueOnError));
+
+                        if (completed)
+                        {
+                            CompleteMetaStepOutput(step, skillExecResult.ResultText, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                        {
+                            progress = true;
+                            break;
+                        }
+
+                        if (!continueOnError)
+                        {
+                            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, skillExecResult.FailureMessage ?? $"Meta step '{step.Id}' failed with status '{skillExecResult.ResultStatus}'.", preserveCheckpoint: false);
+                        }
+
+                        CompleteMetaStepOutput(step, skillExecResult.ResultText, pending, outputs, failureAliases);
+                        routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                        progress = true;
+                        break;
+                    }
+
+                    case "agent":
                     {
                         var delegatedSkill = !string.IsNullOrWhiteSpace(step.Skill)
                             ? LoadedSkills.FirstOrDefault(skill =>
@@ -2203,14 +2446,11 @@ public sealed class AgentRuntime : IAgentRuntime
 
                             if (!continueOnError)
                             {
-                                return BuildMetaExecutionOutput(
-                                    metaSkill,
-                                    finalText: null,
-                                    stepResults,
-                                    failureMessage);
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, failureMessage, preserveCheckpoint: false);
                             }
 
                             CompleteMetaStepOutput(step, failureMessage, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
                             progress = true;
                             break;
                         }
@@ -2228,19 +2468,17 @@ public sealed class AgentRuntime : IAgentRuntime
 
                             if (!continueOnError)
                             {
-                                return BuildMetaExecutionOutput(
-                                    metaSkill,
-                                    finalText: null,
-                                    stepResults,
-                                    $"Meta step '{step.Id}' failed output contract validation.");
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' failed output contract validation.", preserveCheckpoint: false);
                             }
 
-                                    CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
-                                    progress = true;
-                                    break;
+                            CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
                         }
 
                         CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
+                        routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
                         progress = true;
                         stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, stepSw.Elapsed.TotalMilliseconds, Continued: false));
                         break;
@@ -2282,14 +2520,11 @@ public sealed class AgentRuntime : IAgentRuntime
 
                             if (!continueOnError)
                             {
-                                return BuildMetaExecutionOutput(
-                                    metaSkill,
-                                    finalText: null,
-                                    stepResults,
-                                    failureMessage);
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, failureMessage, preserveCheckpoint: false);
                             }
 
                             CompleteMetaStepOutput(step, failureMessage, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
                             progress = true;
                             break;
                         }
@@ -2307,19 +2542,17 @@ public sealed class AgentRuntime : IAgentRuntime
 
                             if (!continueOnError)
                             {
-                                return BuildMetaExecutionOutput(
-                                    metaSkill,
-                                    finalText: null,
-                                    stepResults,
-                                    $"Meta step '{step.Id}' failed output contract validation.");
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' failed output contract validation.", preserveCheckpoint: false);
                             }
 
-                                    CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
-                                    progress = true;
-                                    break;
+                            CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
                         }
 
                         CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
+                        routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
                         progress = true;
                         stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, stepSw.Elapsed.TotalMilliseconds, Continued: false));
                         break;
@@ -2329,11 +2562,7 @@ public sealed class AgentRuntime : IAgentRuntime
                     {
                         if (!TryGetStringArray(stepArgs, "options", out var optionsValues) || optionsValues.Count == 0)
                         {
-                            return BuildMetaExecutionOutput(
-                                metaSkill,
-                                finalText: null,
-                                stepResults,
-                                $"Meta step '{step.Id}' is 'llm_classify' but does not declare non-empty options.");
+                            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' is 'llm_classify' but does not declare non-empty options.", preserveCheckpoint: false);
                         }
 
                         var classifyPrompt = BuildClassificationPrompt(stepInput, optionsValues);
@@ -2369,14 +2598,11 @@ public sealed class AgentRuntime : IAgentRuntime
 
                             if (!continueOnError)
                             {
-                                return BuildMetaExecutionOutput(
-                                    metaSkill,
-                                    finalText: null,
-                                    stepResults,
-                                    failureMessage);
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, failureMessage, preserveCheckpoint: false);
                             }
 
                             CompleteMetaStepOutput(step, failureMessage, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
                             progress = true;
                             break;
                         }
@@ -2394,14 +2620,11 @@ public sealed class AgentRuntime : IAgentRuntime
 
                             if (!continueOnError)
                             {
-                                return BuildMetaExecutionOutput(
-                                    metaSkill,
-                                    finalText: null,
-                                    stepResults,
-                                    $"Meta step '{step.Id}' returned classification '{rawLabel}' outside declared options.");
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' returned classification '{rawLabel}' outside declared options.", preserveCheckpoint: false);
                             }
 
                             CompleteMetaStepOutput(step, rawLabel, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
                             progress = true;
                             break;
                         }
@@ -2418,21 +2641,20 @@ public sealed class AgentRuntime : IAgentRuntime
 
                             if (!continueOnError)
                             {
-                                return BuildMetaExecutionOutput(
-                                    metaSkill,
-                                    finalText: null,
-                                    stepResults,
-                                    $"Meta step '{step.Id}' failed output contract validation.");
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' failed output contract validation.", preserveCheckpoint: false);
                             }
 
-                                    CompleteMetaStepOutput(step, selectedLabel!, pending, outputs, failureAliases);
-                                    progress = true;
-                                    break;
+                            CompleteMetaStepOutput(step, selectedLabel!, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
                         }
 
                         CompleteMetaStepOutput(step, selectedLabel!, pending, outputs, failureAliases);
                         progress = true;
                         stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, stepSw.Elapsed.TotalMilliseconds, Continued: false));
+
+                        routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
 
                         if (TryGetRouteMap(stepArgs, out var routeMap))
                         {
@@ -2459,6 +2681,7 @@ public sealed class AgentRuntime : IAgentRuntime
                         {
                             var prompt = GetOptionalString(stepArgs, "prompt")
                                 ?? $"Please provide input for step '{step.Id}'.";
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "user_input_required", 0, Continued: continueOnError));
                             SaveMetaExecutionCheckpoint(
                                 session,
                                 metaSkill.Name,
@@ -2470,8 +2693,6 @@ public sealed class AgentRuntime : IAgentRuntime
                                 failureAliases,
                                 stepResults);
 
-                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "user_input_required", 0, Continued: continueOnError));
-
                             if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
                             {
                                 progress = true;
@@ -2480,11 +2701,7 @@ public sealed class AgentRuntime : IAgentRuntime
 
                             if (!continueOnError)
                             {
-                                return BuildMetaExecutionOutput(
-                                    metaSkill,
-                                    finalText: null,
-                                    stepResults,
-                                        $"Meta step '{step.Id}' requires user input but no value/default is available in the current execution context. Prompt: {prompt}");
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' requires user input but no value/default is available in the current execution context. Prompt: {prompt}", preserveCheckpoint: true);
                             }
 
                             CompleteMetaStepOutput(step, string.Empty, pending, outputs, failureAliases);
@@ -2492,7 +2709,60 @@ public sealed class AgentRuntime : IAgentRuntime
                             break;
                         }
 
-                        if (!TryValidateMetaStepOutput(step, userValue, out var failureCode))
+                        var normalizedUserValue = userValue;
+                        if (IsClarifyInputTimedOut(session, metaSkill.Name, step))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "user_input_timeout", 0, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' clarify input timed out.", preserveCheckpoint: false);
+
+                            CompleteMetaStepOutput(step, string.Empty, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        if (step.Clarify is not null)
+                        {
+                            var clarifyResult = clarifyValidator.ValidateAndNormalize(userValue, step.Clarify);
+                            if (!clarifyResult.IsValid)
+                            {
+                                stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, clarifyResult.FailureCode, 0, Continued: continueOnError));
+
+                                if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                                {
+                                    progress = true;
+                                    break;
+                                }
+
+                                if (!continueOnError)
+                                {
+                                    var clarifyFailure = clarifyResult.FailureCode switch
+                                    {
+                                        "user_input_cancelled" => $"Meta step '{step.Id}' clarify input was cancelled.",
+                                        "user_input_timeout" => $"Meta step '{step.Id}' clarify input timed out.",
+                                        _ => $"Meta step '{step.Id}' failed clarify validation."
+                                    };
+                                    return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, clarifyFailure, preserveCheckpoint: false);
+                                }
+
+                                CompleteMetaStepOutput(step, userValue, pending, outputs, failureAliases);
+                                routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                                progress = true;
+                                break;
+                            }
+
+                            normalizedUserValue = clarifyResult.NormalizedOutput ?? userValue;
+                        }
+
+                        if (!TryValidateMetaStepOutput(step, normalizedUserValue, out var failureCode))
                         {
                             stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, failureCode, 0, Continued: continueOnError));
 
@@ -2504,30 +2774,24 @@ public sealed class AgentRuntime : IAgentRuntime
 
                             if (!continueOnError)
                             {
-                                return BuildMetaExecutionOutput(
-                                    metaSkill,
-                                    finalText: null,
-                                    stepResults,
-                                    $"Meta step '{step.Id}' failed output contract validation.");
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' failed output contract validation.", preserveCheckpoint: false);
                             }
 
-                                    CompleteMetaStepOutput(step, userValue, pending, outputs, failureAliases);
-                                    progress = true;
-                                    break;
+                            CompleteMetaStepOutput(step, userValue, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
                         }
 
-                        CompleteMetaStepOutput(step, userValue, pending, outputs, failureAliases);
+                        CompleteMetaStepOutput(step, normalizedUserValue, pending, outputs, failureAliases);
+                        routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
                         progress = true;
                         stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, 0, Continued: false));
                         break;
                     }
 
                     default:
-                        return BuildMetaExecutionOutput(
-                            metaSkill,
-                            finalText: null,
-                            stepResults,
-                            $"Meta step '{step.Id}' has unsupported kind '{step.Kind}'.");
+                        return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' has unsupported kind '{step.Kind}'.", preserveCheckpoint: false);
                 }
             }
 
@@ -2538,19 +2802,59 @@ public sealed class AgentRuntime : IAgentRuntime
             if (remaining.Length == 0)
                 break;
 
-            return BuildMetaExecutionOutput(
-                metaSkill,
-                finalText: null,
-                stepResults,
-                $"Meta execution graph stalled. Remaining unresolved steps: {string.Join(", ", remaining)}.");
+            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta execution graph stalled. Remaining unresolved steps: {string.Join(", ", remaining)}.", preserveCheckpoint: false);
         }
 
         var executedStepIds = steps.Where(step => outputs.ContainsKey(step.Id)).Select(static step => step.Id).ToList();
         var finalText = ResolveMetaFinalText(metaSkill, steps, outputs, executedStepIds);
 
-        ClearMetaExecutionCheckpoint(session, metaSkill.Name);
+        return ReturnMetaExecutionOutput(session, metaSkill, finalText, stepResults, error: null, preserveCheckpoint: false);
+    }
 
-        return BuildMetaExecutionOutput(metaSkill, finalText, stepResults, error: null);
+    private static string ReturnMetaExecutionOutput(
+        Session session,
+        SkillDefinition metaSkill,
+        string? finalText,
+        IReadOnlyList<MetaStepExecutionResult> stepResults,
+        string? error,
+        bool preserveCheckpoint)
+    {
+        AppendMetaRunHistory(session, metaSkill.Name, finalText, stepResults, error, preserveCheckpoint);
+
+        if (!preserveCheckpoint)
+            ClearMetaExecutionCheckpoint(session, metaSkill.Name);
+
+        return BuildMetaExecutionOutput(metaSkill, finalText, stepResults, error);
+    }
+
+    private static void AppendMetaRunHistory(
+        Session session,
+        string skillName,
+        string? finalText,
+        IReadOnlyList<MetaStepExecutionResult> stepResults,
+        string? error,
+        bool preserveCheckpoint)
+    {
+        session.MetaRunHistory.Add(new SessionMetaRunRecord
+        {
+            RunId = $"meta_{Guid.NewGuid():N}",
+            SkillName = skillName,
+            Status = preserveCheckpoint ? "paused" : error is null ? "completed" : "failed",
+            FinalText = finalText,
+            Error = error,
+            ErrorCode = string.IsNullOrWhiteSpace(error) ? null : DeriveMetaErrorCode(error, stepResults),
+            StartedAtUtc = DateTimeOffset.UtcNow,
+            CompletedAtUtc = DateTimeOffset.UtcNow,
+            StepResults = stepResults.Select(static result => new SessionMetaStepResult
+            {
+                Id = result.Id,
+                Kind = result.Kind,
+                Status = result.Status,
+                FailureCode = result.FailureCode,
+                DurationMs = result.DurationMs,
+                Continued = result.Continued
+            }).ToList()
+        });
     }
 
     private static string BuildMetaExecutionOutput(
@@ -2621,6 +2925,51 @@ public sealed class AgentRuntime : IAgentRuntime
         foreach (var pendingStep in checkpoint.PendingStepIds)
         {
             if (!validStepIds.Contains(pendingStep))
+            {
+                session.MetaExecutionCheckpoint = null;
+                return false;
+            }
+        }
+
+        foreach (var blockedStep in checkpoint.BlockedStepIds)
+        {
+            if (!validStepIds.Contains(blockedStep))
+            {
+                session.MetaExecutionCheckpoint = null;
+                return false;
+            }
+        }
+
+        foreach (var stepId in checkpoint.Outputs.Keys)
+        {
+            if (!validStepIds.Contains(stepId))
+            {
+                session.MetaExecutionCheckpoint = null;
+                return false;
+            }
+        }
+
+        foreach (var stepId in checkpoint.FailureAliases.Keys)
+        {
+            if (!validStepIds.Contains(stepId))
+            {
+                session.MetaExecutionCheckpoint = null;
+                return false;
+            }
+        }
+
+        foreach (var aliasTarget in checkpoint.FailureAliases.Values)
+        {
+            if (!validStepIds.Contains(aliasTarget))
+            {
+                session.MetaExecutionCheckpoint = null;
+                return false;
+            }
+        }
+
+        foreach (var result in checkpoint.StepResults)
+        {
+            if (!validStepIds.Contains(result.Id))
             {
                 session.MetaExecutionCheckpoint = null;
                 return false;
@@ -2857,6 +3206,54 @@ public sealed class AgentRuntime : IAgentRuntime
         return lastResult ?? CreateMetaStepFailedToolResult(toolName, toolArgsJson, "step_failed", $"Meta step '{step.Id}' failed before producing a result.");
     }
 
+    private async Task<ToolExecutionResult> ExecuteMetaSkillExecStepWithPolicyAsync(
+        SkillDefinition delegatedSkill,
+        MetaSkillStepDefinition step,
+        IReadOnlyList<string> arguments,
+        string? workingDirectory,
+        string? stdin,
+        CancellationToken ct)
+    {
+        var maxAttempts = Math.Max(1, step.Retry.MaxAttempts);
+        ToolExecutionResult? lastResult = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            using var timeoutCts = CreateMetaStepTimeout(step, ct);
+            var effectiveCt = timeoutCts?.Token ?? ct;
+            try
+            {
+                lastResult = await _toolExecutor.ExecuteSkillEntrypointAsync(
+                    delegatedSkill,
+                    step.SkillExecEntrypoint!,
+                    arguments,
+                    workingDirectory,
+                    step.SkillExecParseMode ?? "text",
+                    stdin,
+                    effectiveCt);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                lastResult = CreateMetaStepFailedToolResult(
+                    "skill_exec",
+                    "{}",
+                    "step_timeout",
+                    $"Meta step '{step.Id}' timed out after {step.TimeoutSeconds} second(s).");
+            }
+
+            if (lastResult is not null &&
+                (string.Equals(lastResult.ResultStatus, ToolResultStatuses.Completed, StringComparison.Ordinal) || attempt == maxAttempts))
+            {
+                return lastResult;
+            }
+
+            if (step.Retry.BackoffMs > 0)
+                await Task.Delay(step.Retry.BackoffMs, ct);
+        }
+
+        return lastResult ?? CreateMetaStepFailedToolResult("skill_exec", "{}", "step_failed", $"Meta step '{step.Id}' failed before producing a result.");
+    }
+
     private static async Task<MetaLlmStepExecutionResult> ExecuteMetaLlmStepWithPolicyAsync(
         MetaSkillStepDefinition step,
         Func<CancellationToken, Task<LlmExecutionResult>> executeAsync,
@@ -2974,6 +3371,16 @@ public sealed class AgentRuntime : IAgentRuntime
         out string? failureCode)
     {
         failureCode = null;
+        if (step.OutputChoices.Count > 0)
+        {
+            var candidate = output.Trim();
+            if (!step.OutputChoices.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+            {
+                failureCode = "invalid_output_choice";
+                return false;
+            }
+        }
+
         var contract = step.OutputContract;
         if (contract is null || string.IsNullOrWhiteSpace(contract.Format) || contract.Format.Equals("text", StringComparison.OrdinalIgnoreCase))
             return true;
@@ -3025,6 +3432,23 @@ public sealed class AgentRuntime : IAgentRuntime
             => new(null, failureCode, failureMessage);
     }
 
+    private static bool IsClarifyInputTimedOut(Session session, string skillName, MetaSkillStepDefinition step)
+    {
+        if (step.Clarify?.TimeoutSeconds is not > 0)
+            return false;
+
+        var checkpoint = session.MetaExecutionCheckpoint;
+        if (checkpoint is null ||
+            !string.Equals(checkpoint.SkillName, skillName, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(checkpoint.PendingStepId, step.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var deadline = checkpoint.CreatedAtUtc + TimeSpan.FromSeconds(step.Clarify.TimeoutSeconds.Value);
+        return DateTimeOffset.UtcNow >= deadline;
+    }
+
     private readonly record struct MetaStepExecutionResult(string Id, string Kind, string Status, string? FailureCode, double DurationMs, bool Continued);
 
     private static Dictionary<string, object?> DeserializeStepArgs(string? withJson)
@@ -3046,7 +3470,18 @@ public sealed class AgentRuntime : IAgentRuntime
     }
 
     private static string? GetOptionalString(Dictionary<string, object?> args, string key)
-        => args.TryGetValue(key, out var value) && value is string text ? text : null;
+    {
+        if (!args.TryGetValue(key, out var value) || value is null)
+            return null;
+
+        if (value is string text)
+            return text;
+
+        if (value is JsonElement json && json.ValueKind == JsonValueKind.String)
+            return json.GetString();
+
+        return null;
+    }
 
     private static bool? GetOptionalBoolean(Dictionary<string, object?> args, string key)
     {
@@ -3523,10 +3958,14 @@ public sealed class AgentRuntime : IAgentRuntime
     {
         lock (_skillGate)
         {
+            var promptVisibleSkills = _metaSkillsEnabled
+                ? skills
+                : skills.Where(static skill => skill.Kind != SkillKind.Meta).ToArray();
+
             // Progressive disclosure: only the metadata index lives in the system prompt.
             // The full SKILL.md body for any single skill is fetched on demand via the
             // `load_skill` tool, which reads from LoadedSkills (this same snapshot).
-            var skillSection = SkillPromptBuilder.BuildIndex(skills, _skillsConfig?.InstructionPrompt);
+            var skillSection = SkillPromptBuilder.BuildIndex(promptVisibleSkills, _skillsConfig?.InstructionPrompt);
             var basePrompt = AgentSystemPromptBuilder.BuildBaseSystemPrompt(_requireToolApproval);
             _skillPromptLength = skillSection.Length;
             _systemPrompt = string.IsNullOrEmpty(skillSection) ? basePrompt : basePrompt + "\n" + skillSection;

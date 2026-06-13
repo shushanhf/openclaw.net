@@ -554,6 +554,18 @@ public static class SkillLoader
                 return null;
             }
 
+            string? toolArgsJson = null;
+            if (doc.RootElement.TryGetProperty("tool_args", out var compositionToolArgsElement))
+            {
+                if (compositionToolArgsElement.ValueKind != JsonValueKind.Object)
+                {
+                    errorCode = "invalid_tool_args";
+                    return null;
+                }
+
+                toolArgsJson = compositionToolArgsElement.GetRawText();
+            }
+
             var steps = new List<MetaSkillStepDefinition>();
             foreach (var stepElement in stepsElement.EnumerateArray())
             {
@@ -628,6 +640,39 @@ public static class SkillLoader
                     withJson = withElement.GetRawText();
                 }
 
+                string? when = null;
+                if (stepElement.TryGetProperty("when", out var whenElement))
+                {
+                    if (whenElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(whenElement.GetString()))
+                    {
+                        errorCode = "invalid_when_expression";
+                        return null;
+                    }
+
+                    when = whenElement.GetString();
+                }
+
+                if (!TryParseStepToolArgs(stepElement, kind, out var stepToolArgsJson, out errorCode))
+                    return null;
+
+                if (!TryParseToolAllowlist(stepElement, kind, out var toolAllowlist, out errorCode))
+                    return null;
+
+                if (!TryParseOutputChoices(stepElement, kind, out var outputChoices, out errorCode))
+                    return null;
+
+                if (!TryParseClarify(stepElement, withJson, kind, out var clarify, out errorCode))
+                    return null;
+
+                if (!TryParseRouteArray(stepElement, out var routes, out var hasRouteArray, out errorCode))
+                    return null;
+
+                if (hasRouteArray && HasLegacyRouteObject(withJson))
+                {
+                    errorCode = "invalid_route";
+                    return null;
+                }
+
                 if (!TryParseOnFailure(stepElement, out var onFailure, out errorCode))
                     return null;
 
@@ -640,13 +685,27 @@ public static class SkillLoader
                 if (!TryParseOutputContract(stepElement, out var outputContract, out errorCode))
                     return null;
 
+                if (!TryParseSkillExecOptions(stepElement, kind, out var skillExecEntrypoint, out var skillExecArgs, out var skillExecStdin, out var skillExecCwd, out var skillExecParseMode, out errorCode))
+                    return null;
+
                 steps.Add(new MetaSkillStepDefinition
                 {
                     Id = idElement.GetString()!,
                     Kind = kind,
                     Skill = skill,
                     Tool = tool,
+                    SkillExecEntrypoint = skillExecEntrypoint,
+                    SkillExecArgs = skillExecArgs,
+                    SkillExecStdin = skillExecStdin,
+                    SkillExecCwd = skillExecCwd,
+                    SkillExecParseMode = skillExecParseMode,
                     WithJson = withJson,
+                    When = when,
+                    ToolArgsJson = stepToolArgsJson,
+                    ToolAllowlist = toolAllowlist,
+                    OutputChoices = outputChoices,
+                    Clarify = clarify,
+                    Routes = routes,
                     DependsOn = dependsOn,
                     OnFailure = onFailure,
                     TimeoutSeconds = timeoutSeconds,
@@ -658,7 +717,11 @@ public static class SkillLoader
             if (!ValidateComposition(steps, out errorCode))
                 return null;
 
-            return new MetaSkillComposition { Steps = steps };
+            return new MetaSkillComposition
+            {
+                ToolArgsJson = toolArgsJson,
+                Steps = steps
+            };
         }
         catch
         {
@@ -718,6 +781,12 @@ public static class SkillLoader
             }
 
             if (step.Kind.Equals("skill_exec", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(step.Skill))
+            {
+                errorCode = "invalid_step_kind_fields";
+                return false;
+            }
+
+            if (step.Kind.Equals("skill_exec", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(step.SkillExecEntrypoint))
             {
                 errorCode = "invalid_step_kind_fields";
                 return false;
@@ -787,6 +856,9 @@ public static class SkillLoader
             return false;
         }
 
+        if (!ValidateRouteArrays(steps, out errorCode))
+            return false;
+
         if (!ValidateFailureBranches(steps, ids, out errorCode))
             return false;
 
@@ -812,7 +884,10 @@ public static class SkillLoader
 
         var value = onFailureElement.GetString();
         if (string.IsNullOrWhiteSpace(value))
-            return true;
+        {
+            errorCode = "invalid_on_failure";
+            return false;
+        }
 
         onFailure = value.Trim();
         return true;
@@ -854,6 +929,15 @@ public static class SkillLoader
         {
             errorCode = "invalid_step_retry";
             return false;
+        }
+
+        foreach (var property in retryElement.EnumerateObject())
+        {
+            if (!IsSupportedRetryProperty(property.Name))
+            {
+                errorCode = "invalid_step_retry";
+                return false;
+            }
         }
 
         var maxAttempts = 1;
@@ -906,6 +990,15 @@ public static class SkillLoader
             return false;
         }
 
+        foreach (var property in contractElement.EnumerateObject())
+        {
+            if (!IsSupportedOutputContractProperty(property.Name))
+            {
+                errorCode = "invalid_output_contract";
+                return false;
+            }
+        }
+
         var format = "text";
         if (contractElement.TryGetProperty("format", out var formatElement))
         {
@@ -951,6 +1044,12 @@ public static class SkillLoader
 
                 requiredProperties.Add(propertyName.Trim());
             }
+        }
+
+        if (requiredProperties.Count > 0 && format != "json")
+        {
+            errorCode = "invalid_output_contract";
+            return false;
         }
 
         outputContract = new MetaStepOutputContract
@@ -1010,10 +1109,849 @@ public static class SkillLoader
                 errorCode = "invalid_on_failure";
                 return false;
             }
+
+            foreach (var route in step.Routes)
+            {
+                if (!fallbackTargets.Contains(route.To))
+                    continue;
+
+                errorCode = "invalid_on_failure";
+                return false;
+            }
+
+            if (ContainsFallbackTargetInLegacyClassifyRoutes(step.WithJson, fallbackTargets))
+            {
+                errorCode = "invalid_on_failure";
+                return false;
+            }
         }
 
         return true;
     }
+
+    private static bool ContainsFallbackTargetInLegacyClassifyRoutes(string? withJson, ISet<string> fallbackTargets)
+    {
+        if (string.IsNullOrWhiteSpace(withJson))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(withJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object ||
+                !doc.RootElement.TryGetProperty("route", out var routeElement) ||
+                routeElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            foreach (var routeProperty in routeElement.EnumerateObject())
+            {
+                if (routeProperty.Value.ValueKind == JsonValueKind.String)
+                {
+                    var targetStep = routeProperty.Value.GetString();
+                    if (!string.IsNullOrWhiteSpace(targetStep) && fallbackTargets.Contains(targetStep))
+                        return true;
+
+                    continue;
+                }
+
+                if (routeProperty.Value.ValueKind != JsonValueKind.Array)
+                    continue;
+
+                foreach (var target in routeProperty.Value.EnumerateArray())
+                {
+                    if (target.ValueKind != JsonValueKind.String)
+                        continue;
+
+                    var targetStep = target.GetString();
+                    if (!string.IsNullOrWhiteSpace(targetStep) && fallbackTargets.Contains(targetStep))
+                        return true;
+                }
+            }
+        }
+        catch
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    private static bool TryParseStringArrayProperty(
+        JsonElement parentElement,
+        string propertyName,
+        out IReadOnlyList<string> values,
+        out string? errorCode)
+    {
+        errorCode = null;
+        values = [];
+
+        if (!parentElement.TryGetProperty(propertyName, out var propertyElement))
+            return true;
+
+        if (propertyElement.ValueKind != JsonValueKind.Array)
+        {
+            errorCode = "invalid_meta_composition";
+            return false;
+        }
+
+        var items = new List<string>();
+        foreach (var itemElement in propertyElement.EnumerateArray())
+        {
+            if (itemElement.ValueKind != JsonValueKind.String)
+            {
+                errorCode = "invalid_meta_composition";
+                return false;
+            }
+
+            var item = itemElement.GetString();
+            if (string.IsNullOrWhiteSpace(item))
+            {
+                errorCode = "invalid_meta_composition";
+                return false;
+            }
+
+            items.Add(item);
+        }
+
+        values = items;
+        return true;
+    }
+
+    private static bool TryParseToolAllowlist(
+        JsonElement stepElement,
+        string? stepKind,
+        out IReadOnlyList<string> toolAllowlist,
+        out string? errorCode)
+    {
+        toolAllowlist = [];
+        errorCode = null;
+
+        if (!stepElement.TryGetProperty("tool_allowlist", out var toolAllowlistElement))
+            return true;
+
+        if (!IsToolStepKind(stepKind))
+        {
+            errorCode = "invalid_tool_allowlist";
+            return false;
+        }
+
+        if (!TryParseStringArrayProperty(stepElement, "tool_allowlist", out var values, out _))
+        {
+            errorCode = "invalid_tool_allowlist";
+            return false;
+        }
+
+        if (values.Count == 0)
+        {
+            errorCode = "invalid_tool_allowlist";
+            return false;
+        }
+
+        toolAllowlist = values;
+        return true;
+    }
+
+    private static bool TryParseStepToolArgs(
+        JsonElement stepElement,
+        string? stepKind,
+        out string? toolArgsJson,
+        out string? errorCode)
+    {
+        toolArgsJson = null;
+        errorCode = null;
+
+        if (!stepElement.TryGetProperty("tool_args", out var stepToolArgsElement))
+            return true;
+
+        if (!IsToolStepKind(stepKind) || stepToolArgsElement.ValueKind != JsonValueKind.Object)
+        {
+            errorCode = "invalid_tool_args";
+            return false;
+        }
+
+        toolArgsJson = stepToolArgsElement.GetRawText();
+        return true;
+    }
+
+    private static bool TryParseOutputChoices(
+        JsonElement stepElement,
+        string? stepKind,
+        out IReadOnlyList<string> outputChoices,
+        out string? errorCode)
+    {
+        outputChoices = [];
+        errorCode = null;
+
+        if (!stepElement.TryGetProperty("output_choices", out _))
+            return true;
+
+        if (!IsOutputChoicesStepKind(stepKind))
+        {
+            errorCode = "invalid_output_choices";
+            return false;
+        }
+
+        if (!TryParseStringArrayProperty(stepElement, "output_choices", out var values, out _))
+        {
+            errorCode = "invalid_output_choices";
+            return false;
+        }
+
+        if (values.Count == 0)
+        {
+            errorCode = "invalid_output_choices";
+            return false;
+        }
+
+        outputChoices = values;
+        return true;
+    }
+
+    private static bool TryParseSkillExecOptions(
+        JsonElement stepElement,
+        string? stepKind,
+        out string? entrypoint,
+        out IReadOnlyList<string> args,
+        out string? stdin,
+        out string? cwd,
+        out string? parseMode,
+        out string? errorCode)
+    {
+        entrypoint = null;
+        args = [];
+        stdin = null;
+        cwd = null;
+        parseMode = null;
+        errorCode = null;
+
+        var isSkillExec = string.Equals(stepKind, "skill_exec", StringComparison.OrdinalIgnoreCase);
+
+        if (stepElement.TryGetProperty("entrypoint", out var entrypointElement))
+        {
+            if (!isSkillExec || entrypointElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(entrypointElement.GetString()))
+            {
+                errorCode = "invalid_skill_exec";
+                return false;
+            }
+
+            entrypoint = entrypointElement.GetString()!.Trim();
+        }
+
+        if (stepElement.TryGetProperty("args", out _))
+        {
+            if (!isSkillExec || !TryParseStringArrayProperty(stepElement, "args", out args, out _))
+            {
+                errorCode = "invalid_skill_exec";
+                return false;
+            }
+        }
+
+        if (stepElement.TryGetProperty("stdin", out var stdinElement))
+        {
+            if (!isSkillExec || stdinElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(stdinElement.GetString()))
+            {
+                errorCode = "invalid_skill_exec";
+                return false;
+            }
+
+            stdin = stdinElement.GetString();
+        }
+
+        if (stepElement.TryGetProperty("cwd", out var cwdElement))
+        {
+            if (!isSkillExec || cwdElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(cwdElement.GetString()))
+            {
+                errorCode = "invalid_skill_exec";
+                return false;
+            }
+
+            cwd = cwdElement.GetString()!.Trim();
+            if (Path.IsPathRooted(cwd) || cwd.Contains("..", StringComparison.Ordinal))
+            {
+                errorCode = "invalid_skill_exec";
+                return false;
+            }
+        }
+
+        if (stepElement.TryGetProperty("parse_mode", out var parseModeElement))
+        {
+            if (!isSkillExec || parseModeElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(parseModeElement.GetString()))
+            {
+                errorCode = "invalid_skill_exec";
+                return false;
+            }
+
+            parseMode = parseModeElement.GetString()!.Trim().ToLowerInvariant();
+            if (parseMode is not ("text" or "json"))
+            {
+                errorCode = "invalid_skill_exec";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryParseRouteArray(
+        JsonElement stepElement,
+        out IReadOnlyList<MetaRouteDefinition> routes,
+        out bool hasRouteArray,
+        out string? errorCode)
+    {
+        errorCode = null;
+        routes = [];
+        hasRouteArray = false;
+
+        if (!stepElement.TryGetProperty("route", out var routesElement))
+            return true;
+
+        hasRouteArray = true;
+
+        if (routesElement.ValueKind != JsonValueKind.Array)
+        {
+            errorCode = "invalid_route";
+            return false;
+        }
+
+        if (routesElement.GetArrayLength() == 0)
+        {
+            errorCode = "invalid_route";
+            return false;
+        }
+
+        var parsedRoutes = new List<MetaRouteDefinition>();
+        foreach (var routeElement in routesElement.EnumerateArray())
+        {
+            if (routeElement.ValueKind != JsonValueKind.Object)
+            {
+                errorCode = "invalid_route";
+                return false;
+            }
+
+            foreach (var property in routeElement.EnumerateObject())
+            {
+                if (!IsSupportedRouteProperty(property.Name))
+                {
+                    errorCode = "invalid_route";
+                    return false;
+                }
+            }
+
+            string? when = null;
+            if (routeElement.TryGetProperty("when", out var whenElement))
+            {
+                if (whenElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(whenElement.GetString()))
+                {
+                    errorCode = "invalid_when_expression";
+                    return false;
+                }
+
+                when = whenElement.GetString();
+            }
+
+            if (!routeElement.TryGetProperty("to", out var toElement) || toElement.ValueKind != JsonValueKind.String)
+            {
+                errorCode = "invalid_route";
+                return false;
+            }
+
+            var target = toElement.GetString();
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                errorCode = "invalid_route";
+                return false;
+            }
+
+            parsedRoutes.Add(new MetaRouteDefinition
+            {
+                When = when,
+                To = target
+            });
+        }
+
+        routes = parsedRoutes;
+        return true;
+    }
+
+    private static bool TryParseClarify(
+        JsonElement stepElement,
+        string? withJson,
+        string? stepKind,
+        out MetaClarifySchema? clarify,
+        out string? errorCode)
+    {
+        errorCode = null;
+        clarify = null;
+
+        if (!TryGetClarifyElement(stepElement, withJson, out var clarifyElement, out errorCode))
+            return false;
+
+        if (clarifyElement is null)
+            return true;
+
+        if (!string.Equals(stepKind, "user_input", StringComparison.OrdinalIgnoreCase))
+        {
+            errorCode = "invalid_clarify_schema";
+            return false;
+        }
+
+        if (clarifyElement.Value.ValueKind != JsonValueKind.Object)
+        {
+            errorCode = "invalid_clarify_schema";
+            return false;
+        }
+
+        foreach (var property in clarifyElement.Value.EnumerateObject())
+        {
+            if (!IsSupportedClarifyProperty(property.Name))
+            {
+                errorCode = "invalid_clarify_schema";
+                return false;
+            }
+        }
+
+        var mode = "chat";
+        if (clarifyElement.Value.TryGetProperty("mode", out var modeElement))
+        {
+            if (modeElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(modeElement.GetString()))
+            {
+                errorCode = "invalid_clarify_schema";
+                return false;
+            }
+
+            mode = modeElement.GetString() ?? "chat";
+            if (!string.Equals(mode, "chat", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(mode, "form", StringComparison.OrdinalIgnoreCase))
+            {
+                errorCode = "invalid_clarify_schema";
+                return false;
+            }
+        }
+
+        var extractNaturalLanguage = false;
+        if (clarifyElement.Value.TryGetProperty("extract_natural_language", out var extractElement))
+        {
+            if (extractElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                errorCode = "invalid_clarify_schema";
+                return false;
+            }
+
+            extractNaturalLanguage = extractElement.ValueKind == JsonValueKind.True;
+        }
+
+        if (!TryParseStringArrayProperty(clarifyElement.Value, "cancel_words", out var cancelWords, out _))
+        {
+            errorCode = "invalid_clarify_schema";
+            return false;
+        }
+
+        int? timeoutSeconds = null;
+        if (clarifyElement.Value.TryGetProperty("timeout_seconds", out var timeoutElement))
+        {
+            if (timeoutElement.ValueKind != JsonValueKind.Number || !timeoutElement.TryGetInt32(out var parsedTimeout) || parsedTimeout <= 0)
+            {
+                errorCode = "invalid_clarify_schema";
+                return false;
+            }
+
+            timeoutSeconds = parsedTimeout;
+        }
+
+        var fields = new List<MetaClarifyField>();
+        var fieldNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (clarifyElement.Value.TryGetProperty("fields", out var fieldsElement))
+        {
+            if (fieldsElement.ValueKind != JsonValueKind.Array)
+            {
+                errorCode = "invalid_clarify_schema";
+                return false;
+            }
+
+            foreach (var fieldElement in fieldsElement.EnumerateArray())
+            {
+                if (fieldElement.ValueKind != JsonValueKind.Object)
+                {
+                    errorCode = "invalid_clarify_schema";
+                    return false;
+                }
+
+                foreach (var property in fieldElement.EnumerateObject())
+                {
+                    if (!IsSupportedClarifyFieldProperty(property.Name))
+                    {
+                        errorCode = "invalid_clarify_schema";
+                        return false;
+                    }
+                }
+
+                if (!fieldElement.TryGetProperty("name", out var nameElement) || nameElement.ValueKind != JsonValueKind.String)
+                {
+                    errorCode = "invalid_clarify_schema";
+                    return false;
+                }
+
+                if (!fieldElement.TryGetProperty("type", out var typeElement) || typeElement.ValueKind != JsonValueKind.String)
+                {
+                    errorCode = "invalid_clarify_schema";
+                    return false;
+                }
+
+                if (!TryParseStringArrayProperty(fieldElement, "options", out var options, out _))
+                {
+                    errorCode = "invalid_clarify_schema";
+                    return false;
+                }
+
+                int? minLength = null;
+                if (fieldElement.TryGetProperty("min_length", out var minLengthElement))
+                {
+                    if (minLengthElement.ValueKind != JsonValueKind.Number || !minLengthElement.TryGetInt32(out var parsedMinLength) || parsedMinLength < 0)
+                    {
+                        errorCode = "invalid_clarify_schema";
+                        return false;
+                    }
+
+                    minLength = parsedMinLength;
+                }
+
+                int? maxLength = null;
+                if (fieldElement.TryGetProperty("max_length", out var maxLengthElement))
+                {
+                    if (maxLengthElement.ValueKind != JsonValueKind.Number || !maxLengthElement.TryGetInt32(out var parsedMaxLength) || parsedMaxLength < 0)
+                    {
+                        errorCode = "invalid_clarify_schema";
+                        return false;
+                    }
+
+                    maxLength = parsedMaxLength;
+                }
+
+                double? min = null;
+                if (fieldElement.TryGetProperty("min", out var minElement))
+                {
+                    if (minElement.ValueKind != JsonValueKind.Number || !minElement.TryGetDouble(out var parsedMin))
+                    {
+                        errorCode = "invalid_clarify_schema";
+                        return false;
+                    }
+
+                    min = parsedMin;
+                }
+
+                double? max = null;
+                if (fieldElement.TryGetProperty("max", out var maxElement))
+                {
+                    if (maxElement.ValueKind != JsonValueKind.Number || !maxElement.TryGetDouble(out var parsedMax))
+                    {
+                        errorCode = "invalid_clarify_schema";
+                        return false;
+                    }
+
+                    max = parsedMax;
+                }
+
+                var fieldName = nameElement.GetString();
+                var fieldType = typeElement.GetString();
+                if (string.IsNullOrWhiteSpace(fieldName) || string.IsNullOrWhiteSpace(fieldType))
+                {
+                    errorCode = "invalid_clarify_schema";
+                    return false;
+                }
+
+                if (!fieldNames.Add(fieldName))
+                {
+                    errorCode = "invalid_clarify_schema";
+                    return false;
+                }
+
+                if (fieldElement.TryGetProperty("required", out var requiredElement) &&
+                    requiredElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                {
+                    errorCode = "invalid_clarify_schema";
+                    return false;
+                }
+
+                if (!string.Equals(fieldType, "string", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(fieldType, "integer", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(fieldType, "number", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(fieldType, "boolean", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(fieldType, "enum", StringComparison.OrdinalIgnoreCase))
+                {
+                    errorCode = "invalid_clarify_schema";
+                    return false;
+                }
+
+                if (string.Equals(fieldType, "enum", StringComparison.OrdinalIgnoreCase) && options.Count == 0)
+                {
+                    errorCode = "invalid_clarify_schema";
+                    return false;
+                }
+
+                if (!ValidateClarifyFieldConstraints(fieldType, options, minLength, maxLength, min, max, out errorCode))
+                {
+                    return false;
+                }
+
+                JsonElement? defaultValue = null;
+                if (fieldElement.TryGetProperty("default", out var defaultElement))
+                {
+                    if (!IsValidClarifyDefaultValue(fieldType, options, minLength, maxLength, min, max, defaultElement))
+                    {
+                        errorCode = "invalid_clarify_schema";
+                        return false;
+                    }
+
+                    defaultValue = defaultElement.Clone();
+                }
+
+                fields.Add(new MetaClarifyField
+                {
+                    Name = fieldName,
+                    Type = fieldType,
+                    Required = fieldElement.TryGetProperty("required", out var requiredFlagElement) && requiredFlagElement.ValueKind == JsonValueKind.True,
+                    DefaultValue = defaultValue,
+                    Options = options,
+                    MinLength = minLength,
+                    MaxLength = maxLength,
+                    Min = min,
+                    Max = max
+                });
+            }
+        }
+
+        if (string.Equals(mode, "form", StringComparison.OrdinalIgnoreCase) && fields.Count == 0)
+        {
+            errorCode = "invalid_clarify_schema";
+            return false;
+        }
+
+        clarify = new MetaClarifySchema
+        {
+            Mode = mode,
+            ExtractNaturalLanguage = extractNaturalLanguage,
+            Fields = fields,
+            CancelWords = cancelWords,
+            TimeoutSeconds = timeoutSeconds
+        };
+
+        return true;
+    }
+
+    private static bool TryGetClarifyElement(
+        JsonElement stepElement,
+        string? withJson,
+        out JsonElement? clarifyElement,
+        out string? errorCode)
+    {
+        clarifyElement = null;
+        errorCode = null;
+
+        var hasDirectClarify = stepElement.TryGetProperty("clarify", out var directClarifyElement);
+        JsonElement? withClarifyElement = null;
+
+        if (!string.IsNullOrWhiteSpace(withJson))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(withJson);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                    doc.RootElement.TryGetProperty("clarify", out var parsedWithClarifyElement))
+                {
+                    withClarifyElement = parsedWithClarifyElement.Clone();
+                }
+            }
+            catch
+            {
+                errorCode = "invalid_clarify_schema";
+                return false;
+            }
+        }
+
+        if (hasDirectClarify)
+        {
+            clarifyElement = directClarifyElement;
+            return true;
+        }
+
+        clarifyElement = withClarifyElement;
+        return true;
+    }
+
+    private static bool ValidateClarifyFieldConstraints(
+        string fieldType,
+        IReadOnlyList<string> options,
+        int? minLength,
+        int? maxLength,
+        double? min,
+        double? max,
+        out string? errorCode)
+    {
+        errorCode = null;
+
+        var isString = string.Equals(fieldType, "string", StringComparison.OrdinalIgnoreCase);
+        var isInteger = string.Equals(fieldType, "integer", StringComparison.OrdinalIgnoreCase);
+        var isNumber = string.Equals(fieldType, "number", StringComparison.OrdinalIgnoreCase);
+        var isEnum = string.Equals(fieldType, "enum", StringComparison.OrdinalIgnoreCase);
+
+        if ((!isString && (minLength.HasValue || maxLength.HasValue)) ||
+            (!(isInteger || isNumber) && (min.HasValue || max.HasValue)) ||
+            (!isEnum && options.Count > 0))
+        {
+            errorCode = "invalid_clarify_schema";
+            return false;
+        }
+
+        if (minLength.HasValue && maxLength.HasValue && minLength.Value > maxLength.Value)
+        {
+            errorCode = "invalid_clarify_schema";
+            return false;
+        }
+
+        if (min.HasValue && max.HasValue && min.Value > max.Value)
+        {
+            errorCode = "invalid_clarify_schema";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsValidClarifyDefaultValue(
+        string fieldType,
+        IReadOnlyList<string> options,
+        int? minLength,
+        int? maxLength,
+        double? min,
+        double? max,
+        JsonElement defaultElement)
+    {
+        if (string.Equals(fieldType, "string", StringComparison.OrdinalIgnoreCase))
+        {
+            if (defaultElement.ValueKind != JsonValueKind.String)
+                return false;
+
+            var value = defaultElement.GetString() ?? string.Empty;
+            return (!minLength.HasValue || value.Length >= minLength.Value) &&
+                   (!maxLength.HasValue || value.Length <= maxLength.Value);
+        }
+
+        if (string.Equals(fieldType, "integer", StringComparison.OrdinalIgnoreCase))
+        {
+            if (defaultElement.ValueKind != JsonValueKind.Number || !defaultElement.TryGetInt64(out var intValue))
+                return false;
+
+            return (!min.HasValue || intValue >= min.Value) &&
+                   (!max.HasValue || intValue <= max.Value);
+        }
+
+        if (string.Equals(fieldType, "number", StringComparison.OrdinalIgnoreCase))
+        {
+            if (defaultElement.ValueKind != JsonValueKind.Number || !defaultElement.TryGetDouble(out var doubleValue))
+                return false;
+
+            return (!min.HasValue || doubleValue >= min.Value) &&
+                   (!max.HasValue || doubleValue <= max.Value);
+        }
+
+        if (string.Equals(fieldType, "boolean", StringComparison.OrdinalIgnoreCase))
+            return defaultElement.ValueKind is JsonValueKind.True or JsonValueKind.False;
+
+        if (string.Equals(fieldType, "enum", StringComparison.OrdinalIgnoreCase))
+        {
+            if (defaultElement.ValueKind != JsonValueKind.String)
+                return false;
+
+            var defaultText = defaultElement.GetString();
+            return !string.IsNullOrWhiteSpace(defaultText) && options.Contains(defaultText, StringComparer.Ordinal);
+        }
+
+        return false;
+    }
+
+    private static bool IsSupportedClarifyProperty(string propertyName)
+        => propertyName is "mode" or "extract_natural_language" or "cancel_words" or "timeout_seconds" or "fields";
+
+    private static bool IsSupportedClarifyFieldProperty(string propertyName)
+        => propertyName is "name" or "type" or "required" or "options" or "min_length" or "max_length" or "min" or "max" or "default";
+
+    private static bool IsSupportedRetryProperty(string propertyName)
+        => propertyName is "max_attempts" or "backoff_ms";
+
+    private static bool IsSupportedOutputContractProperty(string propertyName)
+        => propertyName is "format" or "required_properties";
+
+    private static bool IsSupportedRouteProperty(string propertyName)
+        => propertyName is "when" or "to";
+
+    private static bool HasLegacyRouteObject(string? withJson)
+    {
+        if (string.IsNullOrWhiteSpace(withJson))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(withJson);
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                   doc.RootElement.TryGetProperty("route", out var routeElement) &&
+                   routeElement.ValueKind == JsonValueKind.Object;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool ValidateRouteArrays(IReadOnlyList<MetaSkillStepDefinition> steps, out string? errorCode)
+    {
+        errorCode = null;
+        var ids = steps.Select(static step => step.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var step in steps)
+        {
+            var fallbackCount = 0;
+            for (var i = 0; i < step.Routes.Count; i++)
+            {
+                var route = step.Routes[i];
+                if (!ids.Contains(route.To))
+                {
+                    errorCode = "invalid_route_target";
+                    return false;
+                }
+
+                if (string.Equals(route.To, step.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    errorCode = "invalid_route_scope";
+                    return false;
+                }
+
+                if (string.IsNullOrWhiteSpace(route.When) && ++fallbackCount > 1)
+                {
+                    errorCode = "invalid_route_fallback";
+                    return false;
+                }
+
+                if (string.IsNullOrWhiteSpace(route.When) && i != step.Routes.Count - 1)
+                {
+                    errorCode = "invalid_route_fallback";
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsToolStepKind(string? stepKind)
+        => string.Equals(stepKind, "tool_call", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsOutputChoicesStepKind(string? stepKind)
+        => string.Equals(stepKind, "agent", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(stepKind, "skill_exec", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(stepKind, "tool_call", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(stepKind, "llm_chat", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(stepKind, "llm_classify", StringComparison.OrdinalIgnoreCase);
 
     private static bool ValidateClassifyStep(string? withJson, ISet<string> knownStepIds)
     {

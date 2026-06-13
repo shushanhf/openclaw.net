@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace OpenClaw.Core.Skills;
@@ -9,6 +10,9 @@ public sealed class SkillsConfig
 {
     /// <summary>Master toggle for the skills system.</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>Dedicated runtime policy for OpenClaw meta-skill invocation.</summary>
+    public MetaSkillPolicyConfig MetaSkill { get; set; } = new();
 
     /// <summary>Skill loading configuration.</summary>
     public SkillLoadConfig Load { get; set; } = new();
@@ -37,6 +41,12 @@ public sealed class SkillsConfig
     /// Values &lt;= 0 fall back to the built-in default (256 KB).
     /// </summary>
     public int MaxResourceReadBytes { get; set; } = 256 * 1024;
+}
+
+public sealed class MetaSkillPolicyConfig
+{
+    /// <summary>When false, keep meta skills loaded for inventory/history but reject explicit meta invocation.</summary>
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>
@@ -115,7 +125,7 @@ public sealed class SkillDefinition
     /// <summary>Optional priority for meta-skill resolution.</summary>
     public int? MetaPriority { get; init; }
 
-    /// <summary>Final text mode for meta-skill result shaping.</summary>
+    /// <summary>Final text mode for meta-skill result shaping. Supported values are auto, raw, structured, or step:&lt;id&gt;.</summary>
     public string? FinalTextMode { get; init; }
 
     /// <summary>Meta-skill composition definition (steps DAG).</summary>
@@ -154,6 +164,9 @@ public enum SkillKind : byte
 /// </summary>
 public sealed class MetaSkillComposition
 {
+    /// <summary>Optional raw JSON payload from the composition-level 'tool_args' field.</summary>
+    public string? ToolArgsJson { get; init; }
+
     /// <summary>Ordered step definitions.</summary>
     public IReadOnlyList<MetaSkillStepDefinition> Steps { get; init; } = [];
 }
@@ -175,8 +188,41 @@ public sealed class MetaSkillStepDefinition
     /// <summary>Optional delegated tool name.</summary>
     public string? Tool { get; init; }
 
+    /// <summary>Optional skill_exec entrypoint name for deterministic subprocess execution.</summary>
+    public string? SkillExecEntrypoint { get; init; }
+
+    /// <summary>Optional argument vector for skill_exec entrypoints.</summary>
+    public IReadOnlyList<string> SkillExecArgs { get; init; } = [];
+
+    /// <summary>Optional stdin template for skill_exec entrypoints.</summary>
+    public string? SkillExecStdin { get; init; }
+
+    /// <summary>Optional relative working directory for skill_exec entrypoints.</summary>
+    public string? SkillExecCwd { get; init; }
+
+    /// <summary>Optional parse mode for skill_exec stdout.</summary>
+    public string? SkillExecParseMode { get; init; }
+
     /// <summary>Optional raw JSON payload from the step's 'with' field.</summary>
     public string? WithJson { get; init; }
+
+    /// <summary>Optional expression controlling whether this step should execute.</summary>
+    public string? When { get; init; }
+
+    /// <summary>Optional raw JSON payload from the step's 'tool_args' field.</summary>
+    public string? ToolArgsJson { get; init; }
+
+    /// <summary>Optional allowlist restricting tool access for this step.</summary>
+    public IReadOnlyList<string> ToolAllowlist { get; init; } = [];
+
+    /// <summary>Optional allowed output values for this step.</summary>
+    public IReadOnlyList<string> OutputChoices { get; init; } = [];
+
+    /// <summary>Optional clarify schema for interactive input collection.</summary>
+    public MetaClarifySchema? Clarify { get; init; }
+
+    /// <summary>Optional route definitions for branching to subsequent steps. Each target must resolve to another declared step.</summary>
+    public IReadOnlyList<MetaRouteDefinition> Routes { get; init; } = [];
 
     /// <summary>Optional upstream step dependencies.</summary>
     public IReadOnlyList<string> DependsOn { get; init; } = [];
@@ -192,6 +238,72 @@ public sealed class MetaSkillStepDefinition
 
     /// <summary>Optional contract for validating this step's intermediate output.</summary>
     public MetaStepOutputContract OutputContract { get; init; } = new();
+}
+
+/// <summary>
+/// Conditional route to another declared step in the same composition.
+/// </summary>
+public sealed class MetaRouteDefinition
+{
+    /// <summary>Optional expression controlling whether the route is taken.</summary>
+    public string? When { get; init; }
+
+    /// <summary>Destination step identifier.</summary>
+    public required string To { get; init; }
+}
+
+/// <summary>
+/// Schema for a clarify step.
+/// </summary>
+public sealed class MetaClarifySchema
+{
+    /// <summary>Interaction mode, such as chat or form.</summary>
+    public string Mode { get; init; } = "chat";
+
+    /// <summary>Whether freeform natural-language extraction is enabled.</summary>
+    public bool ExtractNaturalLanguage { get; init; }
+
+    /// <summary>Declared fields for form mode.</summary>
+    public IReadOnlyList<MetaClarifyField> Fields { get; init; } = [];
+
+    /// <summary>Words that cancel the clarify interaction.</summary>
+    public IReadOnlyList<string> CancelWords { get; init; } = [];
+
+    /// <summary>Optional timeout in seconds for clarify input.</summary>
+    public int? TimeoutSeconds { get; init; }
+}
+
+/// <summary>
+/// One field inside a clarify schema.
+/// </summary>
+public sealed class MetaClarifyField
+{
+    /// <summary>Field identifier.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>Field type, such as string or enum.</summary>
+    public required string Type { get; init; }
+
+    /// <summary>Whether the field is required.</summary>
+    public bool Required { get; init; }
+
+    /// <summary>Optional default value.</summary>
+    public JsonElement? DefaultValue { get; init; }
+
+    /// <summary>Allowed values for enum fields.</summary>
+    public IReadOnlyList<string> Options { get; init; } = [];
+
+    /// <summary>Optional minimum string length.</summary>
+    public int? MinLength { get; init; }
+
+    /// <summary>Optional maximum string length.</summary>
+    public int? MaxLength { get; init; }
+
+    /// <summary>Optional numeric lower bound.</summary>
+    public double? Min { get; init; }
+
+    /// <summary>Optional numeric upper bound.</summary>
+    public double? Max { get; init; }
 }
 
 /// <summary>

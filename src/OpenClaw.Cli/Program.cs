@@ -120,7 +120,9 @@ internal static class Program
               openclaw compatibility <catalog> [options]
               openclaw plugins <install|remove|list|search> [options]
               openclaw skill <new|critique|generate|validate|run|package|list> [options]
-              openclaw skills <inspect|install|list> [options]
+              openclaw skills <inspect|install|list|meta-runs> [options]
+              openclaw skills meta-runs <session-id> [--storage <path>] [--limit <count>] [--run <run-id>] [--verbose] [--json]
+              openclaw skills meta-runs replay <session-id> --run <run-id> [--storage <path>] [--json]
               openclaw clawhub [wrapper options] [--] <clawhub args...>
 
             Common options:

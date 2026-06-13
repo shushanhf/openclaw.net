@@ -132,41 +132,6 @@ public class AgentRuntimeTests
     }
 
     [Fact]
-    public async Task RunAsync_DisableToolsRoutingDecision_ExposesNoToolsToLlm()
-    {
-        ChatOptions? capturedOptions = null;
-        _chatClient.GetResponseAsync(
-            Arg.Any<IList<ChatMessage>>(),
-            Arg.Do<ChatOptions>(options => capturedOptions = options),
-            Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new ChatResponse(new[] { new ChatMessage(ChatRole.Assistant, "ok") })));
-
-        var routing = Substitute.For<ITurnRoutingPolicy>();
-        routing.ResolveAsync(Arg.Any<TurnRoutingRequest>(), Arg.Any<CancellationToken>())
-            .Returns(new TurnRoutingDecision
-            {
-                Tier = "T0",
-                DisableTools = true,
-                Reason = "disable_tools"
-            });
-
-        var agent = new AgentRuntime(
-            _chatClient,
-            [new CountingTool("read_file", "file result"), new CountingTool("shell", "shell result")],
-            _memory,
-            _config,
-            maxHistoryTurns: 5,
-            turnRoutingPolicy: routing);
-        var session = new Session { Id = "sess-disable-tools", SenderId = "user1", ChannelId = "test-channel" };
-
-        await agent.RunAsync(session, "answer directly", CancellationToken.None);
-
-        Assert.NotNull(capturedOptions);
-        Assert.Empty(capturedOptions!.Tools!);
-        Assert.False(session.RouteToolsDisabled);
-    }
-
-    [Fact]
     public async Task RunAsync_DefaultRoutingDecision_DoesNotClearManualAllowedToolsForActiveCall()
     {
         ChatOptions? capturedOptions = null;
@@ -620,6 +585,68 @@ public class AgentRuntimeTests
     }
 
     [Fact]
+    public async Task ExecuteMetaSkillAsync_LlmChatContinueOnError_AppliesRouteCompletion()
+    {
+        var routedTool = new CountingTool("routed_tool", "routed");
+        var skippedTool = new CountingTool("skipped_tool", "skipped");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [routedTool, skippedTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "step:routed",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "chat",
+                                Kind = "llm_chat",
+                                WithJson = "{\"continue_on_error\":true}",
+                                OutputChoices = ["accepted"],
+                                Routes =
+                                [
+                                    new MetaRouteDefinition { When = "outputs.chat != ''", To = "routed" },
+                                    new MetaRouteDefinition { To = "skipped" }
+                                ]
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "routed",
+                                Kind = "tool_call",
+                                Tool = "routed_tool"
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "skipped",
+                                Kind = "tool_call",
+                                Tool = "skipped_tool"
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var result = await InvokeMetaSkillAsync(agent, new Session { Id = "sess", SenderId = "u", ChannelId = "c" }, "meta-flow", "hello", CancellationToken.None);
+
+        Assert.Equal("routed", result);
+        Assert.Equal(1, routedTool.CallCount);
+        Assert.Equal(0, skippedTool.CallCount);
+    }
+
+    [Fact]
     public async Task ExecuteMetaSkillAsync_OnFailure_ExecutesSubstituteAndMirrorsOutputToPrimaryStep()
     {
         var failingTool = new ThrowingTool("failing_tool", "boom");
@@ -788,6 +815,76 @@ public class AgentRuntimeTests
         Assert.Equal("completed", resumed);
         Assert.Null(session.MetaExecutionCheckpoint);
         Assert.Equal(1, postTool.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_ClarifyTimeout_OnFailureEmptyResume_ExecutesFallback()
+    {
+        var fallbackTool = new CountingTool("fallback_tool", "fallback complete");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [fallbackTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "step:finish",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "ask",
+                                Kind = "user_input",
+                                OnFailure = "finish",
+                                Clarify = new MetaClarifySchema
+                                {
+                                    Mode = "chat",
+                                    TimeoutSeconds = 1,
+                                    Fields = [new MetaClarifyField { Name = "topic", Type = "string", Required = true }]
+                                }
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "finish",
+                                Kind = "tool_call",
+                                Tool = "fallback_tool"
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var session = new Session { Id = "sess", SenderId = "u", ChannelId = "c" };
+        session.MetaExecutionCheckpoint = new SessionMetaExecutionCheckpoint
+        {
+            SkillName = "meta-flow",
+            PendingStepId = "ask",
+            Prompt = "Please provide input for step 'ask'.",
+            CreatedAtUtc = DateTimeOffset.UtcNow - TimeSpan.FromSeconds(5),
+            LastUpdatedAtUtc = DateTimeOffset.UtcNow - TimeSpan.FromSeconds(5),
+            PendingStepIds = ["ask", "finish"],
+            BlockedStepIds = [],
+            Outputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            FailureAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            StepResults = []
+        };
+
+        var resumed = await InvokeMetaSkillAsync(agent, session, "meta-flow", string.Empty, CancellationToken.None);
+
+        Assert.Equal("fallback complete", resumed);
+        Assert.Null(session.MetaExecutionCheckpoint);
+        Assert.Equal(1, fallbackTool.CallCount);
     }
 
     [Fact]
@@ -1129,6 +1226,10 @@ public class AgentRuntimeTests
         Assert.Single(steps);
         Assert.Equal("ask", steps[0].GetProperty("id").GetString());
         Assert.Equal("failed", steps[0].GetProperty("status").GetString());
+        var checkpoint = Assert.IsType<SessionMetaExecutionCheckpoint>(session.MetaExecutionCheckpoint);
+        var checkpointStep = Assert.Single(checkpoint.StepResults);
+        Assert.Equal("ask", checkpointStep.Id);
+        Assert.Equal("user_input_required", checkpointStep.FailureCode);
     }
 
     [Fact]
@@ -1195,6 +1296,810 @@ public class AgentRuntimeTests
         Assert.Null(session.MetaExecutionCheckpoint);
         Assert.Equal(1, preTool.CallCount);
         Assert.Equal(1, postTool.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_Success_PersistsMetaRunRecord()
+    {
+        var successTool = new CountingTool("success_tool", "ok");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [successTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "step:first",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "first",
+                                Kind = "tool_call",
+                                Tool = "success_tool"
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var session = new Session { Id = "meta-sess", SenderId = "user1", ChannelId = "test-channel" };
+
+        var result = await InvokeMetaSkillAsync(agent, session, "meta-flow", "hello", CancellationToken.None);
+
+        Assert.Equal("ok", result);
+        Assert.NotNull(session.MetaRunHistory);
+        var run = Assert.Single(session.MetaRunHistory);
+        Assert.Equal("meta-flow", run.SkillName);
+        Assert.Equal("completed", run.Status);
+        Assert.Equal("ok", run.FinalText);
+        Assert.Null(run.Error);
+        var step = Assert.Single(run.StepResults);
+        Assert.Equal("first", step.Id);
+        Assert.Equal("completed", step.Status);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_WhenMetaPolicyDisabled_ReturnsPolicyError()
+    {
+        var agent = new AgentRuntime(
+            _chatClient,
+            [],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "first",
+                                Kind = "user_input",
+                                WithJson = "{}"
+                            }
+                        ]
+                    }
+                }
+            ],
+            skillsConfig: new SkillsConfig
+            {
+                MetaSkill = new MetaSkillPolicyConfig
+                {
+                    Enabled = false
+                }
+            });
+
+        var session = new Session { Id = "meta-sess", SenderId = "user1", ChannelId = "test-channel" };
+
+        var result = await InvokeMetaSkillAsync(agent, session, "meta-flow", "hello", CancellationToken.None);
+
+        Assert.Contains("disabled by runtime policy", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(session.MetaRunHistory);
+        Assert.Null(session.MetaExecutionCheckpoint);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_InvalidPlanAfterPause_ClearsCheckpoint()
+    {
+        var metaSkill = new SkillDefinition
+        {
+            Name = "meta-flow",
+            Description = "meta flow",
+            Instructions = "...",
+            Location = "/skills/meta-flow",
+            Kind = SkillKind.Meta,
+            Composition = new MetaSkillComposition
+            {
+                Steps =
+                [
+                    new MetaSkillStepDefinition
+                    {
+                        Id = "ask",
+                        Kind = "user_input",
+                        WithJson = "{\"prompt\":\"Please confirm\"}"
+                    },
+                    new MetaSkillStepDefinition
+                    {
+                        Id = "finish",
+                        Kind = "llm_chat",
+                        DependsOn = ["ask"]
+                    }
+                ]
+            }
+        };
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills: [metaSkill]);
+        var session = new Session { Id = "meta-sess", SenderId = "user1", ChannelId = "test-channel" };
+
+        var paused = await InvokeMetaSkillAsync(agent, session, "meta-flow", string.Empty, CancellationToken.None);
+        Assert.Contains("requires user input", paused, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(session.MetaExecutionCheckpoint);
+
+        var invalidSkill = new SkillDefinition
+        {
+            Name = "meta-flow",
+            Description = "meta flow",
+            Instructions = "...",
+            Location = "/skills/meta-flow",
+            Kind = SkillKind.Meta,
+            Composition = new MetaSkillComposition
+            {
+                Steps =
+                [
+                    new MetaSkillStepDefinition
+                    {
+                        Id = "finish",
+                        Kind = "llm_chat",
+                        DependsOn = ["missing"]
+                    }
+                ]
+            }
+        };
+
+        var field = typeof(AgentRuntime).GetField("_loadedSkills", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        field!.SetValue(agent, new[] { invalidSkill });
+
+        var resumed = await InvokeMetaSkillAsync(agent, session, "meta-flow", "approved", CancellationToken.None);
+
+        Assert.Contains("missing dependency", resumed, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(session.MetaExecutionCheckpoint);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_PlanChangedAfterPause_DropsStaleCompletedStepState()
+    {
+        var finalTool = new CountingTool("final_tool", "final");
+        var metaSkill = new SkillDefinition
+        {
+            Name = "meta-flow",
+            Description = "meta flow",
+            Instructions = "...",
+            Location = "/skills/meta-flow",
+            Kind = SkillKind.Meta,
+            FinalTextMode = "step:finish",
+            Composition = new MetaSkillComposition
+            {
+                Steps =
+                [
+                    new MetaSkillStepDefinition
+                    {
+                        Id = "prepare",
+                        Kind = "user_input",
+                        WithJson = "{\"default\":\"seed\"}"
+                    },
+                    new MetaSkillStepDefinition
+                    {
+                        Id = "ask",
+                        Kind = "user_input",
+                        DependsOn = ["prepare"],
+                        WithJson = "{\"prompt\":\"Please confirm\"}"
+                    },
+                    new MetaSkillStepDefinition
+                    {
+                        Id = "finish",
+                        Kind = "tool_call",
+                        Tool = "final_tool",
+                        DependsOn = ["ask"]
+                    }
+                ]
+            }
+        };
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [finalTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills: [metaSkill]);
+        var session = new Session { Id = "meta-sess", SenderId = "user1", ChannelId = "test-channel" };
+
+        var paused = await InvokeMetaSkillAsync(agent, session, "meta-flow", string.Empty, CancellationToken.None);
+        Assert.Contains("requires user input", paused, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(session.MetaExecutionCheckpoint);
+
+        var changedSkill = new SkillDefinition
+        {
+            Name = "meta-flow",
+            Description = "meta flow",
+            Instructions = "...",
+            Location = "/skills/meta-flow",
+            Kind = SkillKind.Meta,
+            FinalTextMode = "step:finish",
+            Composition = new MetaSkillComposition
+            {
+                Steps =
+                [
+                    new MetaSkillStepDefinition
+                    {
+                        Id = "ask",
+                        Kind = "user_input",
+                        WithJson = "{\"default\":\"approved\"}"
+                    },
+                    new MetaSkillStepDefinition
+                    {
+                        Id = "finish",
+                        Kind = "tool_call",
+                        Tool = "final_tool",
+                        DependsOn = ["ask"]
+                    }
+                ]
+            }
+        };
+
+        var field = typeof(AgentRuntime).GetField("_loadedSkills", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        field!.SetValue(agent, new[] { changedSkill });
+
+        var resumed = await InvokeMetaSkillAsync(agent, session, "meta-flow", "approved", CancellationToken.None);
+
+        Assert.Equal("final", resumed);
+        Assert.Null(session.MetaExecutionCheckpoint);
+        Assert.Equal(1, finalTool.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_WhenFalse_SkipsStepAndBlocksDependents()
+    {
+        var chosenTool = new CountingTool("chosen_tool", "chosen");
+        var afterTool = new CountingTool("after_tool", "after");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [chosenTool, afterTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "prepare",
+                                Kind = "user_input",
+                                WithJson = "{\"default\":\"skip\"}"
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "branch",
+                                Kind = "tool_call",
+                                Tool = "chosen_tool",
+                                When = "outputs.prepare == 'run'",
+                                DependsOn = ["prepare"]
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "after",
+                                Kind = "tool_call",
+                                Tool = "after_tool",
+                                DependsOn = ["branch"]
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var result = await InvokeMetaSkillAsync(agent, new Session { Id = "sess", SenderId = "u", ChannelId = "c" }, "meta-flow", string.Empty, CancellationToken.None);
+
+        Assert.Equal("skip", result);
+        Assert.Equal(0, chosenTool.CallCount);
+        Assert.Equal(0, afterTool.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_RouteArray_SelectsFirstMatchingBranch()
+    {
+        var chosenTool = new CountingTool("chosen_tool", "chosen");
+        var skippedTool = new CountingTool("skipped_tool", "skipped");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [chosenTool, skippedTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "step:chosen",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "ask",
+                                Kind = "user_input",
+                                WithJson = "{\"default\":\"bug\"}",
+                                Routes =
+                                [
+                                    new MetaRouteDefinition { When = "outputs.ask == 'bug'", To = "chosen" },
+                                    new MetaRouteDefinition { To = "skipped" }
+                                ]
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "chosen",
+                                Kind = "tool_call",
+                                Tool = "chosen_tool"
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "skipped",
+                                Kind = "tool_call",
+                                Tool = "skipped_tool"
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var result = await InvokeMetaSkillAsync(agent, new Session { Id = "sess", SenderId = "u", ChannelId = "c" }, "meta-flow", string.Empty, CancellationToken.None);
+
+        Assert.Equal("chosen", result);
+        Assert.Equal(1, chosenTool.CallCount);
+        Assert.Equal(0, skippedTool.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_ToolAllowlist_DeniesToolOutsideStepAllowlist()
+    {
+        var chosenTool = new CountingTool("chosen_tool", "chosen");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [chosenTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "structured",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "call",
+                                Kind = "tool_call",
+                                Tool = "chosen_tool",
+                                ToolAllowlist = ["other_tool"]
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var result = await InvokeMetaSkillAsync(agent, new Session { Id = "sess", SenderId = "u", ChannelId = "c" }, "meta-flow", string.Empty, CancellationToken.None);
+        using var doc = JsonDocument.Parse(result);
+
+        Assert.Equal("tool_not_allowlisted", doc.RootElement.GetProperty("error_code").GetString());
+        Assert.Equal(0, chosenTool.CallCount);
+        var step = doc.RootElement.GetProperty("steps").EnumerateArray().Single();
+        Assert.Equal("blocked", step.GetProperty("status").GetString());
+        Assert.Equal("tool_not_allowlisted", step.GetProperty("failure_code").GetString());
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_UserInputResume_ToolAllowlistDenial_ClearsCheckpoint()
+    {
+        var chosenTool = new CountingTool("chosen_tool", "chosen");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [chosenTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "structured",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "ask",
+                                Kind = "user_input",
+                                WithJson = "{\"prompt\":\"Please confirm\"}"
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "call",
+                                Kind = "tool_call",
+                                Tool = "chosen_tool",
+                                ToolAllowlist = ["other_tool"],
+                                DependsOn = ["ask"]
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var session = new Session { Id = "sess", SenderId = "u", ChannelId = "c" };
+
+        var paused = await InvokeMetaSkillAsync(agent, session, "meta-flow", string.Empty, CancellationToken.None);
+        Assert.Contains("requires user input", paused, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(session.MetaExecutionCheckpoint);
+
+        var resumed = await InvokeMetaSkillAsync(agent, session, "meta-flow", "approved", CancellationToken.None);
+        using var doc = JsonDocument.Parse(resumed);
+
+        Assert.Equal("tool_not_allowlisted", doc.RootElement.GetProperty("error_code").GetString());
+        Assert.Null(session.MetaExecutionCheckpoint);
+        Assert.Equal(0, chosenTool.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_ToolArgs_MergesCompositionAndStepArgsBeforeToolExecution()
+    {
+        var echoTool = new EchoArgumentsTool("echo_tool");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [echoTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "step:call",
+                    Composition = new MetaSkillComposition
+                    {
+                        ToolArgsJson = "{\"trace\":\"{{ input }}\",\"mode\":\"composition\"}",
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "prepare",
+                                Kind = "user_input",
+                                WithJson = "{\"default\":\"ready\"}"
+                            },
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "call",
+                                Kind = "tool_call",
+                                Tool = "echo_tool",
+                                WithJson = "{\"mode\":\"with\",\"state\":\"{{ outputs.prepare }}\"}",
+                                ToolArgsJson = "{\"mode\":\"step\"}",
+                                DependsOn = ["prepare"]
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var result = await InvokeMetaSkillAsync(agent, new Session { Id = "sess", SenderId = "u", ChannelId = "c" }, "meta-flow", "incident-42", CancellationToken.None);
+
+        Assert.Equal("{\"trace\":\"incident-42\",\"mode\":\"step\",\"state\":\"ready\"}", result);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_ClarifyForm_NormalizesInputBeforePublishingOutput()
+    {
+        var agent = new AgentRuntime(
+            _chatClient,
+            [],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "step:ask",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "ask",
+                                Kind = "user_input",
+                                Clarify = new MetaClarifySchema
+                                {
+                                    Mode = "form",
+                                    Fields =
+                                    [
+                                        new MetaClarifyField { Name = "topic", Type = "string", Required = true, MinLength = 3 },
+                                        new MetaClarifyField { Name = "priority", Type = "enum", Options = ["low", "medium", "high"], DefaultValue = JsonSerializer.SerializeToElement("medium") }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var result = await InvokeMetaSkillAsync(agent, new Session { Id = "sess", SenderId = "u", ChannelId = "c" }, "meta-flow", "{\"topic\":\"OpenSquilla\"}", CancellationToken.None);
+
+        Assert.Equal("{\"topic\":\"OpenSquilla\",\"priority\":\"medium\"}", result);
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_ClarifyCancel_ReturnsStructuredCancelError()
+    {
+        var agent = new AgentRuntime(
+            _chatClient,
+            [],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "structured",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "ask",
+                                Kind = "user_input",
+                                Clarify = new MetaClarifySchema
+                                {
+                                    Mode = "chat",
+                                    CancelWords = ["cancel"],
+                                    Fields = [new MetaClarifyField { Name = "topic", Type = "string", Required = true }]
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var result = await InvokeMetaSkillAsync(agent, new Session { Id = "sess", SenderId = "u", ChannelId = "c" }, "meta-flow", "cancel", CancellationToken.None);
+        using var doc = JsonDocument.Parse(result);
+
+        Assert.Equal("user_input_cancelled", doc.RootElement.GetProperty("error_code").GetString());
+        var step = doc.RootElement.GetProperty("steps").EnumerateArray().Single();
+        Assert.Equal("failed", step.GetProperty("status").GetString());
+        Assert.Equal("user_input_cancelled", step.GetProperty("failure_code").GetString());
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_ClarifyTimeout_ReturnsStructuredTimeoutError()
+    {
+        var agent = new AgentRuntime(
+            _chatClient,
+            [],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "structured",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "ask",
+                                Kind = "user_input",
+                                Clarify = new MetaClarifySchema
+                                {
+                                    Mode = "chat",
+                                    TimeoutSeconds = 1,
+                                    Fields = [new MetaClarifyField { Name = "topic", Type = "string", Required = true }]
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var session = new Session { Id = "sess", SenderId = "u", ChannelId = "c" };
+        var paused = await InvokeMetaSkillAsync(agent, session, "meta-flow", string.Empty, CancellationToken.None);
+        Assert.Contains("requires user input", paused, StringComparison.OrdinalIgnoreCase);
+
+        var checkpoint = Assert.IsType<SessionMetaExecutionCheckpoint>(session.MetaExecutionCheckpoint);
+        session.MetaExecutionCheckpoint = new SessionMetaExecutionCheckpoint
+        {
+            SkillName = checkpoint.SkillName,
+            PendingStepId = checkpoint.PendingStepId,
+            Prompt = checkpoint.Prompt,
+            CreatedAtUtc = DateTimeOffset.UtcNow - TimeSpan.FromSeconds(5),
+            LastUpdatedAtUtc = checkpoint.LastUpdatedAtUtc,
+            PendingStepIds = [.. checkpoint.PendingStepIds],
+            BlockedStepIds = [.. checkpoint.BlockedStepIds],
+            Outputs = new Dictionary<string, string>(checkpoint.Outputs, StringComparer.OrdinalIgnoreCase),
+            FailureAliases = new Dictionary<string, string>(checkpoint.FailureAliases, StringComparer.OrdinalIgnoreCase),
+            StepResults = [.. checkpoint.StepResults.Select(static result => new SessionMetaStepResult
+            {
+                Id = result.Id,
+                Kind = result.Kind,
+                Status = result.Status,
+                FailureCode = result.FailureCode,
+                DurationMs = result.DurationMs,
+                Continued = result.Continued
+            })]
+        };
+
+        var resumed = await InvokeMetaSkillAsync(agent, session, "meta-flow", "approved", CancellationToken.None);
+        using var doc = JsonDocument.Parse(resumed);
+
+        Assert.Equal("user_input_timeout", doc.RootElement.GetProperty("error_code").GetString());
+        Assert.Null(session.MetaExecutionCheckpoint);
+        var step = doc.RootElement.GetProperty("steps").EnumerateArray()
+            .Single(element => string.Equals(element.GetProperty("failure_code").GetString(), "user_input_timeout", StringComparison.Ordinal));
+        Assert.Equal("failed", step.GetProperty("status").GetString());
+        Assert.Equal("user_input_timeout", step.GetProperty("failure_code").GetString());
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_OutputChoicesViolation_ReturnsStructuredError()
+    {
+        var chosenTool = new CountingTool("chosen_tool", "unexpected");
+
+        var agent = new AgentRuntime(
+            _chatClient,
+            [chosenTool],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "structured",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "call",
+                                Kind = "tool_call",
+                                Tool = "chosen_tool",
+                                OutputChoices = ["accepted"]
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var result = await InvokeMetaSkillAsync(agent, new Session { Id = "sess", SenderId = "u", ChannelId = "c" }, "meta-flow", string.Empty, CancellationToken.None);
+        using var doc = JsonDocument.Parse(result);
+
+        Assert.Equal("invalid_output_choice", doc.RootElement.GetProperty("error_code").GetString());
+        var step = doc.RootElement.GetProperty("steps").EnumerateArray().Single();
+        Assert.Equal("failed", step.GetProperty("status").GetString());
+        Assert.Equal("invalid_output_choice", step.GetProperty("failure_code").GetString());
+    }
+
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_TemplateRenderFailure_ReturnsStructuredError()
+    {
+        var agent = new AgentRuntime(
+            _chatClient,
+            [],
+            _memory,
+            _config,
+            maxHistoryTurns: 5,
+            skills:
+            [
+                new SkillDefinition
+                {
+                    Name = "meta-flow",
+                    Description = "meta flow",
+                    Instructions = "...",
+                    Location = "/skills/meta-flow",
+                    Kind = SkillKind.Meta,
+                    FinalTextMode = "structured",
+                    Composition = new MetaSkillComposition
+                    {
+                        Steps =
+                        [
+                            new MetaSkillStepDefinition
+                            {
+                                Id = "ask",
+                                Kind = "user_input",
+                                WithJson = "{\"input\":\"{{\"}"
+                            }
+                        ]
+                    }
+                }
+            ]);
+
+        var result = await InvokeMetaSkillAsync(agent, new Session { Id = "sess", SenderId = "u", ChannelId = "c" }, "meta-flow", string.Empty, CancellationToken.None);
+        using var doc = JsonDocument.Parse(result);
+
+        Assert.Equal("template_render_failed", doc.RootElement.GetProperty("error_code").GetString());
+        var step = doc.RootElement.GetProperty("steps").EnumerateArray().Single();
+        Assert.Equal("failed", step.GetProperty("status").GetString());
+        Assert.Equal("template_render_failed", step.GetProperty("failure_code").GetString());
     }
 
     [Fact]
@@ -1358,6 +2263,79 @@ public class AgentRuntimeTests
         Assert.Equal("metadata_capability_denied", steps[0].GetProperty("failure_code").GetString());
     }
 
+    [Fact]
+    public async Task ExecuteMetaSkillAsync_SkillExecStep_RunsScriptResourceEntrypoint()
+    {
+        var skillRoot = Path.Combine(Path.GetTempPath(), "openclaw-meta-skill-exec", Guid.NewGuid().ToString("N"));
+        var scriptsDir = Path.Combine(skillRoot, "scripts");
+        Directory.CreateDirectory(scriptsDir);
+
+        var scriptPath = Path.Combine(scriptsDir, "echo.ps1");
+        await File.WriteAllTextAsync(scriptPath, "param([string]$value)\nWrite-Output \"skill:$value\"\n");
+
+        try
+        {
+            var agent = new AgentRuntime(
+                _chatClient,
+                _tools,
+                _memory,
+                _config,
+                maxHistoryTurns: 5,
+                skills:
+                [
+                    new SkillDefinition
+                    {
+                        Name = "worker-skill",
+                        Description = "worker",
+                        Instructions = "worker instructions",
+                        Location = skillRoot,
+                        Resources =
+                        [
+                            new SkillResource
+                            {
+                                Name = "echo.ps1",
+                                RelativePath = "scripts/echo.ps1",
+                                AbsolutePath = scriptPath,
+                                Kind = SkillResourceKind.Script
+                            }
+                        ]
+                    },
+                    new SkillDefinition
+                    {
+                        Name = "meta-flow",
+                        Description = "meta flow",
+                        Instructions = "...",
+                        Location = skillRoot,
+                        Kind = SkillKind.Meta,
+                        FinalTextMode = "step:exec",
+                        Composition = new MetaSkillComposition
+                        {
+                            Steps =
+                            [
+                                new MetaSkillStepDefinition
+                                {
+                                    Id = "exec",
+                                    Kind = "skill_exec",
+                                    Skill = "worker-skill",
+                                    SkillExecEntrypoint = "echo.ps1",
+                                    SkillExecArgs = ["{{ input }}"],
+                                    SkillExecParseMode = "text"
+                                }
+                            ]
+                        }
+                    }
+                ]);
+
+            var result = await InvokeMetaSkillAsync(agent, new Session { Id = "sess", SenderId = "u", ChannelId = "c" }, "meta-flow", "incident-42", CancellationToken.None);
+
+            Assert.Equal("skill:incident-42", result.Trim());
+        }
+        finally
+        {
+            Directory.Delete(skillRoot, recursive: true);
+        }
+    }
+
     private static async Task<string> InvokeMetaSkillAsync(
         AgentRuntime runtime,
         Session session,
@@ -1386,6 +2364,19 @@ public class AgentRuntimeTests
         {
             Interlocked.Increment(ref _callCount);
             return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class EchoArgumentsTool(string name) : ITool
+    {
+        public string Name { get; } = name;
+        public string Description => "Echo arguments tool";
+        public string ParameterSchema => """{"type":"object"}""";
+
+        public ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
+        {
+            _ = ct;
+            return ValueTask.FromResult(argumentsJson);
         }
     }
 

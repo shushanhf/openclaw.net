@@ -28,6 +28,28 @@ public sealed class CliProgramTests
     }
 
     [Fact]
+    public async Task Main_Help_ListsSkillsMetaRunsCommand()
+    {
+        var previousOut = Console.Out;
+        using var output = new StringWriter();
+        try
+        {
+            Console.SetOut(output);
+
+            var exitCode = await OpenClaw.Cli.Program.Main(["--help"]);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("openclaw skills <inspect|install|list|meta-runs> [options]", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("openclaw skills meta-runs <session-id> [--storage <path>] [--limit <count>] [--run <run-id>] [--verbose] [--json]", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("openclaw skills meta-runs replay <session-id> --run <run-id> [--storage <path>] [--json]", output.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+        }
+    }
+
+    [Fact]
     public async Task Main_ModelsHelp_ListsInstallOptions()
     {
         var previousOut = Console.Out;

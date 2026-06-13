@@ -20,7 +20,26 @@ The OpenSquilla reference implementation under `E:\GitHub\opensquilla\src\opensq
 - `parser.py` treats `on_failure` as a first-class failure-branch contract. It validates that the target step exists, is not self-referential, does not create nested failover chains, and is owned by only one primary step.
 - `types.py` and the parser layer treat `output_choices`, `tool_allowlist`, and `clarify` schema as strong typed contracts, not only runtime conventions.
 
-OpenClaw.NET now has first-class coverage for the closest local equivalents: explicit failure substitution, step-level retry/timeout policy, and JSON intermediate-output validation. The remaining OpenSquilla meta-policy surface is still wider than the current OpenClaw.NET implementation.
+OpenClaw.NET now has first-class coverage for the closest local equivalents: explicit failure substitution, step-level retry/timeout policy, JSON intermediate-output validation, the P0 OpenSquilla-native DSL/Jinja compatibility layer described below, and the initial P1 runtime parity slice for `skill_exec`, meta-run persistence, and dedicated meta policy gating. This shipped slice is implemented end-to-end and validated by the OpenClaw test project (`1907 passed, 0 failed, 0 skipped`). The remaining OpenSquilla meta-policy surface is still wider than the current OpenClaw.NET implementation.
+
+## Newly completed parity
+
+- Native OpenSquilla DSL fields are now first-class parser/runtime contracts: `output_choices`, composition `tool_args`, step `tool_args`, `tool_allowlist`, `clarify`, `when`, and route arrays.
+- `user_input.clarify` now validates typed chat/form input and normalizes successful multi-field results to canonical JSON text.
+- Jinja rendering now uses `Jinja2.NET 1.4.1` with OpenSquilla-compatible `xml_escape`, `slugify`, `truncate`, and `tojson` filters.
+- Runtime parity hardening now also covers stale checkpoint rejection, completion-routing parity for continued non-tool failures, and preserved `user_input_required` pause traces across resume boundaries.
+- `skill_exec` now has a first-class parser/runtime contract for `entrypoint`, `args`, `cwd`, and `parse_mode`, and executes script resources through the tool execution layer with path validation instead of model-delegated chat behavior.
+- Meta runs now append minimal persisted run records to the session model for completed, failed, and paused executions, establishing an audit/replay foundation without a separate operator surface yet.
+- Dedicated meta-layer policy gating now exists via `SkillsConfig.MetaSkill.Enabled`, which keeps meta skills installed while hiding them from the prompt index, suppressing routing hints, and rejecting explicit `meta_invoke` execution.
+
+## Validation status
+
+The current implementation was validated with both focused meta-skill regressions and the full OpenClaw test project:
+
+- focused P1 regression slices: `skill_exec` parser/runtime parity (`7 passed`), meta-run persistence (`4 passed`), and dedicated meta policy gating (`3 passed`)
+- full test project: `1907 passed, 0 failed, 0 skipped`
+
+That means the migration note below reflects the currently shipped and verified OpenClaw.NET behavior, not a planned or partial parity layer.
 
 ## What is already aligned
 
@@ -79,39 +98,36 @@ When porting an OpenSquilla meta skill to OpenClaw.NET, use this order:
 7. Prefer `final_text_mode: structured` when callers need a machine-readable result envelope.
 8. Use `user_input` as the pause/resume boundary for interactive flows.
 
-## Known migration gaps
+## Remaining migration gaps
 
-The current OpenClaw.NET meta path covers DAG execution, fail-fast validation, explicit failure substitution, bounded step execution, JSON intermediate-output contracts, and structured results. It is not yet a full drop-in replacement for every OpenSquilla-native meta-skill contract.
+The current OpenClaw.NET meta path now covers DAG execution, fail-fast validation, explicit failure substitution, bounded step execution, structured results, the P0 native DSL compatibility layer, typed `user_input.clarify`, shared Jinja rendering filters, `skill_exec` subprocess entrypoint execution, minimal persisted meta-run records, dedicated meta policy gating, and the final checkpoint/routing hardening needed for runtime parity inside this slice. It is not yet a full drop-in replacement for every OpenSquilla-native meta-skill contract.
 
 | Gap | Why it matters | Current status |
 | --- | --- | --- |
-| Richer typed intermediate contracts | Advanced flows may need `output_choices`, `tool_allowlist`, and `clarify` schema as parser/runtime contracts, not only conventions inside `with` payloads. | JSON `output_contract` / `output_schema` required-property checks are implemented. OpenSquilla-native `output_choices`, per-step `tool_allowlist`, and full `clarify` schema remain partial. |
-| OpenSquilla-native `user_input.clarify` schema | OpenSquilla supports form/chat collection, typed fields, defaults, enum choices, int ranges, string length limits, cancel keywords, timeouts, and optional natural-language extraction. | OpenClaw.NET currently supports pause/resume with a prompt/default/value string path. It does not yet parse or enforce the full `clarify` schema. |
-| Conditional `when` step execution | OpenSquilla can skip a step after dependencies complete by evaluating a Jinja expression against `inputs` and `outputs`. This keeps DAGs compact without forcing every conditional into a classifier branch. | Not implemented as a first-class step field in OpenClaw.NET. Use `llm_classify` routing or separate DAG shape as a workaround. |
-| OpenSquilla route semantics | OpenSquilla `route` can choose an `agent` or `skill_exec` target through `when` expressions. | OpenClaw.NET currently supports classification-label routing from `llm_classify` to target steps. That is useful, but not equivalent to the OpenSquilla `route: [{ when, to }]` contract. |
-| Jinja template compatibility and safety filters | OpenSquilla authoring guidance relies on filters such as `xml_escape`, `slugify`, `truncate`, and `tojson` to bound and encode untrusted user text or step output. | OpenClaw.NET supports a smaller template surface for `{{ input }}`, `{{ inputs.user_message }}`, and `{{ outputs.<step_id> }}`. Full Jinja compatibility and safety filters are not migrated. |
-| `skill_exec` entrypoint/subprocess semantics | OpenSquilla `skill_exec` runs a skill's `entrypoint` manifest as a deterministic subprocess, with args/stdin/cwd/path checks and parse modes. This matters for document generation, conversion, and CLI-backed skills. | OpenClaw.NET currently treats `agent` and `skill_exec` as delegated model steps that follow skill instructions. It does not yet provide OpenSquilla-style subprocess entrypoint execution. |
-| Meta run history, step trace, replay, and proposals CLI | OpenSquilla exposes `skills meta runs ...`, dry-run replay, and proposal list/show/accept commands for audit and operations. | OpenClaw.NET has session checkpoint restoration and structured per-run output, but no equivalent persistent meta-run CLI/proposal management surface yet. |
-| Dedicated meta-layer policy switches | OpenSquilla has a `[meta_skill] enabled = false` control that keeps meta skills installed for inventory/history while hiding `meta_invoke` and rejecting explicit invocation. | OpenClaw.NET has general skill enablement and `disable-model-invocation`, but not the same dedicated meta-layer switch. |
+| Meta run history detail, replay, and proposals CLI | OpenSquilla exposes `skills meta runs ...`, dry-run replay, and proposal list/show/accept commands for audit and operations. | OpenClaw.NET now persists minimal per-run records in session state and exposes a local `openclaw skills meta-runs <session-id>` inspection surface with default run summaries, optional `--verbose` per-step trace output, `--run <run-id>` filtering, machine-readable `--json` output, and a preview-only `meta-runs replay` availability check that reports a minimal replay plan with an operator-facing summary such as `auditable_not_replayable` when retained step traces exist or `metadata_only_not_replayable` when only run-level metadata remains, alongside retained artifacts, retained step summaries, structured step readiness in both JSON and text output, and structured missing replay inputs with explicit reasons and categories such as `not_persisted` versus `not_retained`; retained step summaries now also drive derived replay readiness labels such as failure-plus-continuation traces, text output now also expands blocked replay requirements with both their kinds and reasons, the plan reuses structured blocking requirements instead of a parallel name-only list, and the stable replay-preview summaries, modes, artifact names, requirement kinds, and readiness/reason strings now resolve through shared session-model constants rather than CLI-local literals, but it still lacks executable replay and proposal-management workflows. |
+| Full `skill_exec` stdin/replay ergonomics | OpenSquilla `skill_exec` includes richer subprocess ergonomics around stdin-heavy workflows and the surrounding operator tooling. | OpenClaw.NET now executes skill entrypoints as validated subprocesses, but the current slice still rejects `stdin` and does not yet expose replay-oriented operator workflows around those runs. |
 | True parallel step scheduling | OpenSquilla can execute independent steps concurrently up to scheduler limits. | OpenClaw.NET preserves DAG ordering but currently executes ready steps through the runtime loop rather than a parallel scheduler. |
 | Built-in MetaSkill catalog and creator/proposal flow | OpenSquilla documents built-in workflows such as `meta-web-research-to-report`, `meta-document-to-decision`, and `meta-skill-creator`, plus proposal inspection and auto-enable audit. | The current OpenClaw.NET path focuses on runtime orchestration. The broader product catalog and proposal workflow are not migrated. |
 
 ## Recommendation
 
-Treat the current OpenClaw.NET meta-skill path as a strong OpenSquilla-style implementation for:
+Treat the current OpenClaw.NET meta-skill path as a shipped, validated OpenSquilla-style implementation for:
 
 - DAG orchestration
 - explicit failure substitution
 - bounded step execution
 - JSON intermediate-output validation
 - structured execution results
+- native OpenSquilla DSL parity for `output_choices`, `tool_args`, `tool_allowlist`, `clarify`, `when`, and route arrays
+- shared Jinja rendering with `xml_escape`, `slugify`, `truncate`, and `tojson`
+- validated `skill_exec` entrypoint execution for script resources with parser/runtime safety checks
+- minimal persisted meta-run history in session state
+- dedicated runtime-level meta policy gating
+- pause/resume checkpoint safety and continued-failure routing parity inside the current meta runtime model
 
-For deeper OpenSquilla parity, prioritize by direct impact on OpenSquilla MetaSkill portability:
+For deeper OpenSquilla parity, prioritize the still-missing surfaces by direct operational impact:
 
-1. **P0: Native DSL compatibility layer.** Support OpenSquilla-native fields that block direct migration: `output_choices`, top-level `tool_args`, per-step `tool_allowlist`, `clarify`, `when`, and `route: [{ when, to }]`. Without this layer, many OpenSquilla `SKILL.md` files require manual rewriting before they can run.
-2. **P0: Full `user_input.clarify` schema.** Support typed form/chat collection, defaults, enum choices, int ranges, string limits, cancel keywords, timeouts, and optional natural-language extraction. This is the main blocker for interactive OpenSquilla MetaSkills.
-3. **P1: Jinja-compatible template rendering and safety filters.** Add the documented filters such as `truncate`, `xml_escape`, `slugify`, and `tojson`. This lets migrated MetaSkills keep OpenSquilla's prompt-safety patterns instead of weakening them during porting.
-4. **P1: `skill_exec` entrypoint/subprocess semantics.** Decide whether `skill_exec` should run real entrypoint manifests. If not, document the OpenClaw.NET behavior as model-delegated execution to prevent false parity assumptions.
-5. **P1: Meta run history, step trace, and replay.** Add persistent run records and CLI/API inspection if migrated workflows need audit, replay, or operations support beyond one structured result envelope.
-6. **P2: True parallel step scheduling.** Preserve DAG correctness while allowing independent steps to run concurrently. This improves performance and better matches OpenSquilla behavior, but most flows can be migrated without it.
-7. **P2: Product-level catalog, creator, and proposal flow.** Add built-in MetaSkills, `meta-skill-creator`, proposal inspection, and auto-enable audit only if OpenClaw.NET needs product-level OpenSquilla parity rather than runtime portability alone.
+1. **P1: Meta run history replay and operations.** A local CLI inspection surface now exists with default run summaries, optional `--verbose` per-step trace output, `--run <run-id>` filtering, `--json` output, and a preview-only replay availability check that distinguishes a minimal replay plan, an evidence-sensitive operator-facing summary, structured step readiness surfaced in both JSON and text output, retained artifacts, retained step summaries, derived readiness labels from retained failure and continuation summaries, and structured missing replay inputs with explicit reasons and categories; text output now also expands blocked requirement kinds and reasons, the plan reuses structured blocking requirements rather than repeating plain names, and the stable replay-preview contract strings now come from shared session-model constants rather than duplicated CLI-local literals; the missing part is executable replay and broader operator workflows beyond one structured result envelope.
+2. **P1: `skill_exec` stdin and operator ergonomics.** Extend the new subprocess path to cover stdin-heavy workflows and the surrounding inspection/replay surfaces if migrated skills depend on them.
+3. **P2: True parallel step scheduling.** Preserve DAG correctness while allowing independent steps to run concurrently. This improves performance and better matches OpenSquilla behavior, but most flows can be migrated without it.
+4. **P2: Product-level catalog, creator, and proposal flow.** Add built-in MetaSkills, `meta-skill-creator`, proposal inspection, and auto-enable audit only if OpenClaw.NET needs product-level OpenSquilla parity rather than runtime portability alone.
