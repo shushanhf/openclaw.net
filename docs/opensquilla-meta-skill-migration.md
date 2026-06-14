@@ -60,7 +60,7 @@ That means the migration note below reflects the currently shipped and verified 
 | MetaSkill definition | `SKILL.md` should declare `kind: meta`, `triggers`, and `composition.steps` | Supported | [SkillLoader.cs](../src/OpenClaw.Core/Skills/SkillLoader.cs#L261)；[SkillModels.cs](../src/OpenClaw.Core/Skills/SkillModels.cs#L100) | Complete |
 | Natural vs explicit triggering | Support natural-language activation and explicit meta-skill invocation | Supported via `triggers` + `meta_invoke` + priority resolution | [MetaSkillResolver.cs](../src/OpenClaw.Core/Skills/MetaSkillResolver.cs#L1)；[MetaInvokeTool.cs](../src/OpenClaw.Core/Skills/MetaInvokeTool.cs#L1) | Complete |
 | Preconditions (runtime and tests) | The OpenSquilla docs call for structural validation, trigger checks, runtime tests, and safety-boundary review before trusting a MetaSkill | Structure/trigger parsing and runtime test coverage are in place across the core execution path | OpenSquilla user/author docs；[SkillLoader.cs](../src/OpenClaw.Core/Skills/SkillLoader.cs#L261)；[MetaSkillResolver.cs](../src/OpenClaw.Core/Skills/MetaSkillResolver.cs#L1)；[SkillTests.cs](../src/OpenClaw.Tests/SkillTests.cs#L240) | Complete |
-| Review workflow object (governance) | High-risk meta changes should have a dedicated review workflow with traceable governance records | The current baseline still relies on runtime constraints and regression coverage; there is no dedicated meta-skill review workflow object yet | OpenSquilla user/author docs；[SkillTests.cs](../src/OpenClaw.Tests/SkillTests.cs#L240) | Partial |
+| Review workflow object (governance) | High-risk meta changes should have a dedicated review workflow with traceable governance records | Implemented with a dedicated durable review-workflow object that is persisted independently from lifecycle status and exposed as additive `workflow` payloads for audit | OpenSquilla user/author docs；[LearningModels.cs](../src/OpenClaw.Core/Models/LearningModels.cs#L23)；[SkillCommands.cs](../src/OpenClaw.Cli/SkillCommands.cs#L3070)；[SkillCommands.cs](../src/OpenClaw.Cli/SkillCommands.cs#L3073)；[SkillCommands.cs](../src/OpenClaw.Cli/SkillCommands.cs#L2829)；[Session.cs](../src/OpenClaw.Core/Models/Session.cs#L595)；[SkillCommandsTests.cs](../src/OpenClaw.Tests/SkillCommandsTests.cs#L4884)；[SkillCommandsTests.cs](../src/OpenClaw.Tests/SkillCommandsTests.cs#L4980) | Complete |
 | Risk metadata | `metadata.opensquilla.risk` / `capabilities` should act as authoring constraints | Meta skill loading now applies explicit risk/capability policy gates | [SkillLoader.cs](../src/OpenClaw.Core/Skills/SkillLoader.cs#L2218)；[SkillTests.cs](../src/OpenClaw.Tests/SkillTests.cs#L1185) | Complete |
 | MetaSkill nesting | The authoring guide says a MetaSkill cannot compose another MetaSkill | Runtime preflight now rejects meta->meta composition | [AgentRuntime.cs](../src/OpenClaw.Agent/AgentRuntime.cs#L1988)；[MafAgentRuntime.cs](../src/OpenClaw.MicrosoftAgentFrameworkAdapter/MafAgentRuntime.cs#L721)；[AgentRuntimeTests.cs](../src/OpenClaw.Tests/AgentRuntimeTests.cs#L1590) | Complete |
 | Final text mode | `auto` / `raw` / `structured` / `step:<id>` | Supported | [AgentRuntime.cs](../src/OpenClaw.Agent/AgentRuntime.cs#L3035)；[AgentRuntime.cs](../src/OpenClaw.Agent/AgentRuntime.cs#L3047) | Complete |
@@ -78,7 +78,7 @@ That means the migration note below reflects the currently shipped and verified 
 
 - The core runtime and operational surface have been migrated.
 - The pre-accept quality gate alignment item is now closed with the `opensquilla-authoring-v1` profile, grouped checks, machine-readable gate diagnostics, and durable gate metadata snapshots.
-- Remaining concrete gaps are product-level: broaden failure/authorization/conflict E2E coverage, and introduce a dedicated meta-skill review workflow object (the matrix row for this remains partial).
+- Remaining concrete gaps are product-level: broaden failure/authorization/conflict E2E coverage.
 
 ## Proposal review overlay (2026-06-13)
 
@@ -88,6 +88,14 @@ The derived proposal layer now includes operator review commands while preservin
 - Review decisions do not execute tools, models, replay, resume, or proposal lifecycle transitions.
 - Same-action replays are idempotent success; opposite-action requests are rejected as conflicts.
 - `meta-runs proposals` and `meta-runs proposals show` expose additive review state (`reviewStatus`, `reviewedAtUtc`, and detail `review` object) alongside existing derived evidence fields.
+
+The governance layer now also includes a dedicated durable review workflow object that is independently auditable:
+
+- Durable object kind is `meta_run_review_workflow` ([LearningModels.cs](../src/OpenClaw.Core/Models/LearningModels.cs#L23)).
+- Durable ID is `meta-run-workflow:<session>:<proposal>` ([SkillCommands.cs](../src/OpenClaw.Cli/SkillCommands.cs#L3070), [SkillCommands.cs](../src/OpenClaw.Cli/SkillCommands.cs#L3071)).
+- Workflow upsert and hydration are handled in the proposal lifecycle pipeline and show/mutation read paths ([SkillCommands.cs](../src/OpenClaw.Cli/SkillCommands.cs#L3073), [SkillCommands.cs](../src/OpenClaw.Cli/SkillCommands.cs#L2829), [SkillCommands.cs](../src/OpenClaw.Cli/SkillCommands.cs#L844), [SkillCommands.cs](../src/OpenClaw.Cli/SkillCommands.cs#L645)).
+- Proposal show/mutation outputs include an additive `workflow` section via DTO fields ([Session.cs](../src/OpenClaw.Core/Models/Session.cs#L526), [Session.cs](../src/OpenClaw.Core/Models/Session.cs#L592), [Session.cs](../src/OpenClaw.Core/Models/Session.cs#L595)).
+- Non-drift regression tests verify denied/conflict paths do not advance `transition_count` ([SkillCommandsTests.cs](../src/OpenClaw.Tests/SkillCommandsTests.cs#L4884), [SkillCommandsTests.cs](../src/OpenClaw.Tests/SkillCommandsTests.cs#L4980)).
 
 ## What is already aligned
 
