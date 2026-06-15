@@ -755,6 +755,7 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(Session))]
 [JsonSerializable(typeof(StableSessionBindingInfo))]
 [JsonSerializable(typeof(ChatTurn))]
+[JsonSerializable(typeof(List<ChatTurn>))]
 [JsonSerializable(typeof(ToolInvocation))]
 [JsonSerializable(typeof(List<ToolInvocation>))]
 [JsonSerializable(typeof(SessionExecutionCheckpoint))]

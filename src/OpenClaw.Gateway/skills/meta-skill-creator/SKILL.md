@@ -61,30 +61,24 @@ composition:
       when: "'route: meta-skill' in (outputs.clarify_intent | lower) and 'needs_clarification: yes' in (outputs.clarify_intent | lower)"
       clarify:
         mode: form
-        intro: |
-          新 meta-skill 的边界还不够明确。请补齐目标和输出形态，避免生成过宽的触发词。
-        nl_extract: true
+        extract_natural_language: true
         fields:
           - name: workflow_goal
             type: string
             required: true
-            prompt: "工作流目标 / Workflow goal"
-            max_chars: 300
+            max_length: 300
           - name: output_shape
             type: string
             required: true
-            prompt: "最终输出形态 / Output shape"
-            max_chars: 200
+            max_length: 200
           - name: trigger_boundary
             type: string
-            prompt: "触发边界或不要覆盖的场景 / Trigger boundary"
-            max_chars: 300
+            max_length: 300
           - name: human_preference_branch
-            type: bool
+            type: boolean
             default: false
-            prompt: "是否需要运行中让用户选择偏好 / Need human preference branch?"
-        cancel_keywords: ["算了", "取消", "cancel", "stop", "abort"]
-        timeout_hours: 24
+        cancel_words: ["算了", "取消", "cancel", "stop", "abort"]
+        timeout_seconds: 86400
 
     - id: normal_skill_exit
       kind: tool_call
@@ -119,7 +113,7 @@ composition:
           {{ outputs.clarify_intent | truncate(1200) }}
 
           Clarification answers (may be empty when not needed):
-          {{ inputs.get('collected', {}).get('creator_clarify', {}) | tojson }}
+          {{ outputs.creator_clarify | default('{}') }}
 
           Decision rules:
           - PREVIEW_ONLY: user asks for an example, template, plan, draft,
@@ -136,15 +130,21 @@ composition:
       kind: skill_exec
       skill: history-explorer
       depends_on: [clarify_intent, creator_clarify]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and 'Unattended meta-skill auto-propose run' in inputs.get('system_prompt', '')"
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
       on_failure: harvest_empty
+      skill_exec_stdin: |
+        {
+          "id": "{{ inputs.session_id }}",
+          "history": {{ inputs.session_history | default('[]') }},
+          "metaRunHistory": {{ inputs.session_meta_runs | default('[]') }}
+        }
       with:
         query: |
           Co-occurring skill chains and meta-skill usage for: {{ outputs.clarify_intent | truncate(1000) }}
           Clarification answers:
-          {{ inputs.get('collected', {}).get('creator_clarify', {}) | tojson }}
+          {{ outputs.creator_clarify | default('{}') }}
         window_days: 30
-        include: [co_occurrences, meta_usage, router_fixtures]
+        include: [turns, tools, meta_runs, co_occurrences]
 
     - id: harvest_empty
       kind: tool_call
@@ -436,8 +436,8 @@ generic skill creation from meta-skill composition, checks trigger collisions,
 classifies operational risk, and previews the proposal before optional
 persistence.
 
-Output is a SKILL.md candidate written to `~/.opensquilla/proposals/<id>/`.
-By default it is not auto-loaded; run `opensquilla meta accept <id>` (Phase 2)
+Output is a SKILL.md candidate written to `~/.openclaw/proposals/<id>/`.
+By default it is not auto-loaded; run `openclaw skills meta-runs proposals accept <session-id> --proposal <id>`
 to enable. If the operator has enabled the auto-propose `auto_enable` setting,
 this manual path also runs the same conservative static safety preflight used by
 cron/dream auto-propose and may promote a low-risk gated proposal immediately.
@@ -453,7 +453,7 @@ user:
 
 Do NOT:
 - Claim a proposal was written unless you have verified it by reading
-  `~/.opensquilla/proposals/<id>/SKILL.md` with the `read_file` tool
+  `~/.openclaw/proposals/<id>/SKILL.md` with the `read_file` tool
 - Invent file paths, proposal IDs, or skill names that you have not seen
   in the orchestrator's actual output
 - "Manually run" the individual skills as a recovery — that bypasses

@@ -797,6 +797,13 @@ public sealed class MafAgentRuntime : IAgentRuntime
             ChannelId = session.ChannelId
         };
 
+        var sessionInputs = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["session_id"] = session.Id,
+            ["session_history"] = JsonSerializer.Serialize(session.History, CoreJsonContext.Default.ListChatTurn),
+            ["session_meta_runs"] = JsonSerializer.Serialize(session.MetaRunHistory, CoreJsonContext.Default.ListSessionMetaRunRecord)
+        };
+
         if (!resumedFromCheckpoint)
             routePlanner.ApplyInitialRoutingBlocks(steps, blocked, pending);
 
@@ -866,7 +873,7 @@ public sealed class MafAgentRuntime : IAgentRuntime
                     continue;
 
                 var stepArgs = DeserializeStepArgs(step.WithJson);
-                var metaContext = new MetaExecutionContext(input, outputs);
+                var metaContext = new MetaExecutionContext(input, outputs, inputs: sessionInputs);
                 var continueOnError = GetOptionalBoolean(stepArgs, "continue_on_error") ?? false;
 
                 if (!string.IsNullOrWhiteSpace(step.When) && !conditionEvaluator.Evaluate(step.When, metaContext))

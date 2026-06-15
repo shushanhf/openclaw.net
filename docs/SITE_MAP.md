@@ -14,6 +14,8 @@ Use this map when turning the Markdown docs into a documentation website. It kee
 | Guides | Tools Guide | [TOOLS_GUIDE.md](TOOLS_GUIDE.md) |
 | Guides | Embedded Local Models | [LOCAL_MODELS.md](LOCAL_MODELS.md) |
 | Guides | MetaSkills (Feature Overview) | [meta-skills.md](meta-skills.md) |
+| Guides | MetaSkill Orchestration Architecture | [meta-skill-orchestration.md](meta-skill-orchestration.md) |
+| Guides | MetaSkill Orchestration (zh-CN) | [zh-CN/meta-skill-orchestration.md](zh-CN/meta-skill-orchestration.md) |
 | Guides | MetaSkill User Guide | [meta-skill-user-guide.md](meta-skill-user-guide.md) |
 | Guides | MetaSkill Authoring Guide | [authoring/meta-skills.md](authoring/meta-skills.md) |
 | Guides | OpenSquilla Meta-Skill Migration | [opensquilla-meta-skill-migration.md](opensquilla-meta-skill-migration.md) |

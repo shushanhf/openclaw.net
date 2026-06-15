@@ -151,4 +151,4 @@ openclaw skills inspect <skill-name>           # Inspect composition structure
 
 ---
 
-[Site Map](SITE_MAP.md) · [Getting Started](GETTING_STARTED.md) · [Authoring Guide](authoring/meta-skills.md)
+[Site Map](SITE_MAP.md) · [Getting Started](GETTING_STARTED.md) · [Authoring Guide](authoring/meta-skills.md) · [Orchestration Architecture](meta-skill-orchestration.md)

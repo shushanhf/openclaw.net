@@ -7,6 +7,9 @@ checkpoint, or final synthesis pass.
 For the full user-facing guide, read
 [`meta-skill-user-guide.md`](meta-skill-user-guide.md). For authoring rules,
 read [`authoring/meta-skills.md`](authoring/meta-skills.md).
+For a deep dive into the orchestration architecture, read
+[`meta-skill-orchestration.md`](meta-skill-orchestration.md)
+([中文版](zh-CN/meta-skill-orchestration.md)).
 
 ## Skills vs Meta-Skills
 
@@ -163,4 +166,4 @@ Each lifecycle transition records `audit` fields (`actorId`, `changedAtUtc`,
 
 ---
 
-[User Guide](meta-skill-user-guide.md) · [Authoring Guide](authoring/meta-skills.md) · [Site Map](SITE_MAP.md)
+[User Guide](meta-skill-user-guide.md) · [Authoring Guide](authoring/meta-skills.md) · [Orchestration Architecture](meta-skill-orchestration.md) · [Site Map](SITE_MAP.md)
