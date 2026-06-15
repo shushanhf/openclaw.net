@@ -531,6 +531,14 @@ public class SkillLoaderTests
     [InlineData("{\"steps\":[{\"id\":\"primary\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"fallback\"},{\"id\":\"fallback\",\"kind\":\"tool_call\",\"tool\":\"safe\",\"depends_on\":[\"primary\"]}]}", "invalid_on_failure")]
     [InlineData("{\"steps\":[{\"id\":\"primary\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"fallback\"},{\"id\":\"fallback\",\"kind\":\"tool_call\",\"tool\":\"safe\"},{\"id\":\"router\",\"kind\":\"agent\",\"skill\":\"triage\",\"route\":[{\"to\":\"fallback\"}]}]}", "invalid_on_failure")]
     [InlineData("{\"steps\":[{\"id\":\"primary\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"fallback\"},{\"id\":\"fallback\",\"kind\":\"tool_call\",\"tool\":\"safe\"},{\"id\":\"classify\",\"kind\":\"llm_classify\",\"with\":{\"options\":[\"ok\"],\"route\":{\"ok\":\"fallback\"}}}]}", "invalid_on_failure")]
+    // Rule 1: on_failure target must exist
+    [InlineData("{\"steps\":[{\"id\":\"primary\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"ghost\"}]}", "invalid_on_failure")]
+    // Rule 2: step cannot self-reference via on_failure
+    [InlineData("{\"steps\":[{\"id\":\"primary\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"primary\"}]}", "invalid_on_failure")]
+    // Rule 3: substitute step cannot have on_failure (no chain)
+    [InlineData("{\"steps\":[{\"id\":\"a\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"b\"},{\"id\":\"b\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"c\"},{\"id\":\"c\",\"kind\":\"tool_call\",\"tool\":\"safe\"}]}", "invalid_on_failure")]
+    // Rule 4: fallback step cannot be shared by multiple primaries
+    [InlineData("{\"steps\":[{\"id\":\"a\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"fallback\"},{\"id\":\"b\",\"kind\":\"tool_call\",\"tool\":\"unstable\",\"on_failure\":\"fallback\"},{\"id\":\"fallback\",\"kind\":\"tool_call\",\"tool\":\"safe\"}]}", "invalid_on_failure")]
     [InlineData("{\"steps\":[{\"id\":\"route\",\"kind\":\"agent\",\"skill\":\"triage\",\"route\":[{\"target\":\"next\",\"to\":\"next\"}]},{\"id\":\"next\",\"kind\":\"llm_chat\"}]}", "invalid_route")]
     public void TryParseSkillContent_MetaStepValidationDiagnostics_ReturnExpectedCode(string compositionJson, string expectedError)
     {

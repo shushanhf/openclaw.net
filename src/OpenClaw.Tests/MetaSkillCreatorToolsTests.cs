@@ -232,7 +232,7 @@ public sealed class MetaSkillCreatorToolsTests
                     return ValueTask.FromResult(payload);
                 }
 
-                using var _ = MetaSkillRuntimeE2ERunTool.PushContext(new MetaSkillRuntimeE2EContext(Runner, Judge));
+                using var ctx = MetaSkillRuntimeE2ERunTool.PushContext(new MetaSkillRuntimeE2EContext(Runner, Judge));
                 var result = await tool.ExecuteAsync(argsJson, CancellationToken.None);
 
                 using var document = JsonDocument.Parse(result);
@@ -451,7 +451,7 @@ public sealed class MetaSkillCreatorToolsTests
             return ValueTask.FromResult(payload);
         }
 
-        using var _ = MetaSkillRuntimeE2ERunTool.PushContext(new MetaSkillRuntimeE2EContext(Runner, Judge));
+        using var ctx = MetaSkillRuntimeE2ERunTool.PushContext(new MetaSkillRuntimeE2EContext(Runner, Judge));
         var result = await tool.ExecuteAsync(argsJson, CancellationToken.None);
         using var document = JsonDocument.Parse(result);
 
