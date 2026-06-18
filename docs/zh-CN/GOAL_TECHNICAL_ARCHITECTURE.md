@@ -681,10 +681,75 @@ internal sealed partial class GoalJsonContext : JsonSerializerContext;
 
 ---
 
-## 参考文献
+## 附录 A：验证检查清单
 
-- **设计文档：** `~/.gstack/projects/geffzhang-openclaw.net/geffzhang-goal-design-20260618-115235.md`
-- **CEO 计划：** `~/.gstack/projects/geffzhang-openclaw.net/ceo-plans/2026-06-18-goal-mechanism.md`
-- **英文技术文档：** `docs/GOAL_TECHNICAL_ARCHITECTURE.md`
-- **评审报告：** 追加在 `docs/zh-CN/GOAL_IMPLEMENTATION.md` 末尾
-- **源代码：** 分支 `goal`，提交 `21e177b` `02e9990` `4c26f48`
+部署 Goal 代码变更后，使用此清单确认功能正常工作。
+
+### 前提条件
+- [ ] Gateway 服务已重新编译并重启
+- [ ] `IGoalService` 已在 DI 中注册（`CoreServicesExtensions.cs`）
+- [ ] `ChatCommandProcessor` 已注入 `IGoalService`（可选参数）
+- [ ] `AgentRuntime` 构造函数接收 `IGoalService`（通过 `NativeAgentRuntimeFactory`）
+- [ ] 至少一个运行时（原生或 MAF）已激活 Goal 集成
+
+### 第一步：创建 Goal
+1. 打开 **webchat** 或 **CLI/TUI**
+2. 发送：`/goal start 测试 Goal 系统 +500k`
+3. **预期：** 返回 `Goal created: "测试 Goal 系统" with budget 500000`
+4. **如果失败：** 检查 `ChatCommandProcessor.HandleGoalCommandAsync` 是否可达且 `IGoalService` 不为 null
+
+### 第二步：验证命令处理
+1. 发送：`/goal`
+2. **预期：** 显示 goal 详情（状态：Active、目标、token 用量、预算）
+3. 发送：`/goal pause`
+4. **预期：** 显示 `Goal paused`
+5. 发送：`/goal resume`
+6. **预期：** 显示 `Goal resumed`
+7. 发送：`/goal clear`
+8. **预期：** 显示 `Goal cleared`
+
+### 第三步：验证自动续跑（核心功能）
+1. 创建 goal：`/goal start 浏览代码库结构 +500k`
+2. 发送实际任务：`列出顶层目录及其用途`
+3. **预期：** 模型开始工作、读取文件，然后：
+   - 如果模型在完成前停下 → 系统自动续跑（在历史中查找 `[goal_check:N]`）
+   - 如果模型已完成 → 系统尊重完成状态
+4. **在日志中检查：**
+   - `Goal activation prompt injected`
+   - `Goal auto-continue iteration N/M`
+   - `[goal_check:N] Continue working toward objective...`
+
+### 第四步：验证通道门控
+1. **webchat** 中（ChannelId = `websocket`）：Goal 自动续跑**应工作**
+2. **CLI/TUI** 中（ChannelId = `cli` / `tui`）：Goal 自动续跑**应工作**
+3. 通过 **HTTP API**（ChannelId 不在交互式列表中）：Goal 自动续跑**不应触发**
+
+### 第五步：验证预算执行
+1. 创建小额预算的 goal：`/goal start 测试 +100`
+2. 发送需要多次工具调用的任务
+3. **预期：** Token 消耗后 Goal 转换为 `BudgetLimited`，模型正常停止
+4. 验证：`/goal` 显示状态 `Budget Limited`
+
+### 第六步：验证阻塞检测
+1. 为不可能的任务创建 goal：`/goal start 删除不存在的文件`
+2. 让模型尝试并失败 3 次（同样的错误）
+3. **预期：** 3 次连续相同阻塞后，Goal 转换为 `Blocked`
+4. 验证：`/goal` 显示状态 `Blocked`
+
+### 第七步：验证会话重置清除 Goal
+1. 创建 goal：`/goal start 临时任务`
+2. 发送：`/new` 或 `/reset`
+3. 发送：`/goal`
+4. **预期：** `No active goal` — 会话重置已清除 goal
+
+### 日志关键字调试
+
+| 关键字 | 含义 | 何时查找 |
+|---------|---------|-------------|
+| `Goal activation prompt injected` | 激活 prompt 已注入消息列表 | 每轮有 active goal 时 |
+| `Goal auto-continue iteration` | 自动续跑已触发 | 模型停下且有 active goal 时 |
+| `Goal {SessionId} budget exceeded` | Token 预算已耗尽 | `TokensUsed >= TokenBudget` 时 |
+| `Goal {SessionId} blocked after 3+` | 阻塞阈值已到达 | 3 次相同阻塞后 |
+| `Goal {SessionId} auto-paused` | 每轮续跑上限已到 | 超过 `MaxContinuationsPerTurn`（10）后 |
+| `Goal auto-continuation skipped` | 非交互式通道阻止续跑 | 非交互式通道有 active goal 时 |
+

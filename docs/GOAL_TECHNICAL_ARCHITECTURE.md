@@ -681,10 +681,78 @@ Decisions made during the three-stage review process (CEO, Design, Engineering):
 
 ---
 
-## References
+## Appendix A: Verification Checklist
 
-- **Design doc:** `~/.gstack/projects/geffzhang-openclaw.net/geffzhang-goal-design-20260618-115235.md`
-- **CEO plan:** `~/.gstack/projects/geffzhang-openclaw.net/ceo-plans/2026-06-18-goal-mechanism.md`
-- **Implementation plan:** `docs/zh-CN/GOAL_IMPLEMENTATION.md` (Chinese)
-- **Review report:** appended to `docs/zh-CN/GOAL_IMPLEMENTATION.md`
-- **Source:** branch `goal`, commits `21e177b` `02e9990` `4c26f48`
+Use this checklist after deploying Goal changes to confirm the feature is working correctly.
+
+### Prerequisites
+- [ ] Gateway service has been rebuilt and restarted after code changes
+- [ ] `IGoalService` is registered in DI (`CoreServicesExtensions.cs`)
+- [ ] `ChatCommandProcessor` has `IGoalService` injected (optional parameter)
+- [ ] `AgentRuntime` constructor receives `IGoalService` (via `NativeAgentRuntimeFactory`)
+- [ ] At least one runtime (native or MAF) has Goal integration active
+
+### Step 1: Create a Goal
+1. Open **webchat** or **CLI/TUI**
+2. Send: `/goal start test the goal system +500k`
+3. **Expected:** Response shows `Goal created: "test the goal system" with budget 500000`
+4. **If fails:** Check that `ChatCommandProcessor.HandleGoalCommandAsync` is reachable and `IGoalService` is not null
+
+### Step 2: Verify Command Processing
+1. Send: `/goal`
+2. **Expected:** Shows goal details (status: Active, objective, tokens used, budget)
+3. Send: `/goal pause`
+4. **Expected:** Shows `Goal paused`
+5. Send: `/goal resume`
+6. **Expected:** Shows `Goal resumed`
+7. Send: `/goal clear`
+8. **Expected:** Shows `Goal cleared`
+
+### Step 3: Verify Auto-Continuation (Core Functionality)
+1. Create a goal: `/goal start explore the codebase structure +500k`
+2. Send a follow-up message: `List the top-level directories and their purposes`
+3. **Expected:** Model starts working, reads files, then:
+   - If model stops before completing → system auto-continues (look for `[goal_check:N]` in history)
+   - If model completes → system respects the completion
+4. **Check logs for:**
+   - `Goal activation prompt injected`
+   - `Goal auto-continue iteration N/M`
+   - `[goal_check:N] Continue working toward objective...`
+
+### Step 4: Verify Channel Gating
+1. In **webchat** (ChannelId = `websocket`): Goal auto-continuation **should work**
+2. In **CLI/TUI** (ChannelId = `cli` / `tui`): Goal auto-continuation **should work**
+3. Via **HTTP API** (ChannelId = not in interactive list): Goal auto-continuation **should NOT fire**
+
+### Step 5: Verify Budget Enforcement
+1. Create a goal with small budget: `/goal start test +100`
+2. Send a task that requires multiple tool calls
+3. **Expected:** Goal transitions to `BudgetLimited` when tokens consumed, model stops normally
+4. Verify: `/goal` shows status `Budget Limited`
+
+### Step 6: Verify Blocker Detection
+1. Create a goal for an impossible task: `/goal start delete non-existent file`
+2. Let the model try and fail 3 times with the same error
+3. **Expected:** After 3 consecutive same-blocker turns, goal transitions to `Blocked`
+4. Verify: `/goal` shows status `Blocked`
+
+### Step 7: Verify Session Reset Clears Goal
+1. Create a goal: `/goal start temporary task`
+2. Send: `/new` or `/reset`
+3. Send: `/goal`
+4. **Expected:** `No active goal` — session reset cleared the goal
+
+### Log Keywords for Debugging
+
+| Keyword | Meaning | When to Look |
+|---------|---------|-------------|
+| `Goal activation prompt injected` | Activation prompt was added to messages | Every turn with active goal |
+| `Goal auto-continue iteration` | Auto-continuation fired | On model stop with active goal |
+| `Goal {SessionId} budget exceeded` | Token budget exhausted | When `TokensUsed >= TokenBudget` |
+| `Goal {SessionId} blocked after 3+` | Blocker threshold reached | After 3 same-blocker turns |
+| `Goal {SessionId} auto-paused` | Per-turn continuation limit hit | After `MaxContinuationsPerTurn` (10) |
+| `Goal auto-continuation skipped` | Non-interactive channel blocked | Non-interactive channel with active goal |
+
+---
+
+## References
