@@ -5,9 +5,11 @@ using Microsoft.Extensions.Hosting;
 using OpenClaw.Channels;
 using OpenClaw.Agent;
 using OpenClaw.Agent.Execution;
+using OpenClaw.Agent.Goal;
 using OpenClaw.Agent.Memory;
 using OpenClaw.Agent.Plugins;
 using OpenClaw.Agent.Routing;
+using OpenClaw.Agent.Tools;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.ExternalCli;
 using OpenClaw.Core.Features;
@@ -224,6 +226,22 @@ internal static class CoreServicesExtensions
         services.AddSingleton<HarnessContractService>();
         services.AddSingleton<EvidenceBundleService>();
         services.AddSingleton<GovernanceLedgerService>();
+
+        // Goal system
+        services.AddSingleton<IGoalService>(sp =>
+        {
+            var startup = sp.GetRequiredService<GatewayStartupContext>();
+            var logger = sp.GetRequiredService<ILogger<InMemoryGoalService>>();
+            var storagePath = startup.Config.Memory.StoragePath;
+            var historyPath = !string.IsNullOrEmpty(storagePath)
+                ? Path.Combine(Path.GetFullPath(storagePath), "goal-history.jsonl")
+                : null;
+            return new InMemoryGoalService(logger, historyPath);
+        });
+        services.AddSingleton<ITool, GetGoalTool>();
+        services.AddSingleton<ITool, CreateGoalTool>();
+        services.AddSingleton<ITool, UpdateGoalTool>();
+
         services.AddSingleton<SharedHarnessStateService>();
         services.AddSingleton<CodebaseHarnessMapService>();
         services.AddSingleton<PlanExecuteVerifyService>();
