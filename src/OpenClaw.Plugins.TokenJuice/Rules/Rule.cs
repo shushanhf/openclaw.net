@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 namespace OpenClaw.Plugins.TokenJuice.Rules;
 
 [JsonSourceGenerationOptions(WriteIndented = false, GenerationMode = JsonSourceGenerationMode.Metadata)]
+[JsonSerializable(typeof(TokenJuiceRule))]
 [JsonSerializable(typeof(List<TokenJuiceRule>))]
 internal partial class TokenJuiceJsonContext : JsonSerializerContext { }
 
