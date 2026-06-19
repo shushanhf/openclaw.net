@@ -51,8 +51,10 @@ public static class RuleLoader
 
         foreach (var resourceName in assembly.GetManifestResourceNames())
         {
-            // Match: OpenClaw.Plugins.TokenJuice.<family>\<name>.json
-            if (!resourceName.StartsWith("OpenClaw.Plugins.TokenJuice.", StringComparison.OrdinalIgnoreCase))
+            // Match: OpenClaw.Plugins.TokenJuice.<family>/<name>.json
+            // (MSBuild uses OS-native path separators in LogicalName; normalize)
+            var normalized = resourceName.Replace('/', '.').Replace('\\', '.');
+            if (!normalized.StartsWith("OpenClaw.Plugins.TokenJuice.", StringComparison.OrdinalIgnoreCase))
                 continue;
 
             if (!resourceName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
