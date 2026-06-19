@@ -1,0 +1,9 @@
+{
+  "id": "openclaw-tokenjuice",
+  "name": "OpenClaw TokenJuice tool output reduction",
+  "version": "1.0.0",
+  "assemblyPath": "OpenClaw.Plugins.TokenJuice.dll",
+  "typeName": "OpenClaw.Plugins.TokenJuice.TokenJuicePlugin",
+  "capabilities": ["tool-interceptor"],
+  "jitOnly": false
+}

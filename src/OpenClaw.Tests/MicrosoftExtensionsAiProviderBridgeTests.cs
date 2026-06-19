@@ -344,5 +344,6 @@ public sealed class MicrosoftExtensionsAiProviderBridgeTests : IDisposable
         public void RegisterMemoryProvider(string providerId, Func<NativeDynamicMemoryProviderContext, IMemoryStore> factory) { }
         public void RegisterHook(IToolHook hook) { }
         public void RegisterService(INativeDynamicPluginService service) { }
+        public void RegisterResultInterceptor(IToolResultInterceptor interceptor) { }
     }
 }
