@@ -11,6 +11,8 @@
 ![Channels](https://img.shields.io/badge/channels-9-green)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/clawdotnet/openclaw.net)
 
+[中文](README-cn.md)
+
 > **Disclaimer**: This project is not affiliated with, endorsed by, or associated with [OpenClaw](https://github.com/openclaw/openclaw). It is an independent .NET implementation inspired by their work.
 
 OpenClaw.NET is a NativeAOT-friendly AI agent runtime and gateway for .NET with practical OpenClaw ecosystem compatibility.
