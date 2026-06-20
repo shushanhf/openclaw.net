@@ -9,6 +9,7 @@ using OpenClaw.Core.Models;
 using OpenClaw.Core.Models.Goal;
 using OpenClaw.Core.Observability;
 using OpenClaw.Core.Sessions;
+using OpenClaw.Core.Loops;
 
 namespace OpenClaw.Core.Pipeline;
 
@@ -33,6 +34,7 @@ public sealed class ChatCommandProcessor
         "/concise",
         "/verbose",
         "/goal",
+        "/loop",
         "/help"
     }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
@@ -41,6 +43,7 @@ public sealed class ChatCommandProcessor
     private readonly IGoalService? _goalService;
     private readonly ConcurrentDictionary<string, Func<string, CancellationToken, Task<string>>> _dynamicCommands = new(StringComparer.OrdinalIgnoreCase);
     private Func<Session, CancellationToken, Task<int>>? _compactCallback;
+    private Func<Session, string, CancellationToken, Task<string?>>? _loopCallback;
 
     public ChatCommandProcessor(SessionManager sessionManager, ProviderUsageTracker? providerUsage = null, IGoalService? goalService = null)
     {
@@ -54,6 +57,13 @@ public sealed class ChatCommandProcessor
     /// </summary>
     public void SetCompactCallback(Func<Session, CancellationToken, Task<int>> callback)
         => _compactCallback = callback;
+
+    /// <summary>
+    /// Sets the callback for /loop command handling (injected from gateway setup).
+    /// The callback receives (session, fullText, ct) and returns the response text.
+    /// </summary>
+    public void SetLoopCallback(Func<Session, string, CancellationToken, Task<string?>> callback)
+        => _loopCallback = callback;
 
     /// <summary>
     /// Registers a dynamic command handler (e.g. from a plugin).
@@ -205,6 +215,12 @@ public sealed class ChatCommandProcessor
 
             case "/help":
                 return (true, "Available commands:\n/status - Show session details\n/new (or /reset) - Clear conversation history\n/model <name> - Override the LLM model for this session\n/model reset - Clear model override\n/usage - Show token counts\n/think <level> - Set reasoning effort (off/low/medium/high)\n/compact - Compact conversation history\n/concise on|off|auto - Control concise operational responses\n/verbose on|off - Toggle verbose output\n/goal <action> - Manage session goals (start/set/create/pause/resume/complete/done/block/blocked/clear/status)\n/goal start <objective> +500k - Start a goal with a token budget\n/goal start <objective> spend 1.5m tokens - Start a goal with a budget phrase\n/help - Show this message");
+
+            case "/loop":
+                if (_loopCallback is null)
+                    return (true, "Loop scheduling is not available in this configuration.");
+                var loopResult = await _loopCallback(session, text, ct);
+                return (true, loopResult);
 
             case "/goal":
                 return (true, await HandleGoalCommandAsync(session, args, ct));

@@ -32,6 +32,7 @@ using OpenClaw.Gateway.PromptCaching;
 using OpenClaw.Gateway.Routing;
 using OpenClaw.Gateway.Workflows;
 using OpenClaw.Core.Validation;
+using OpenClaw.Core.Loops;
 using OpenClaw.PluginKit;
 using OpenClaw.Payments.Abstractions;
 using OpenClaw.Payments.Core;
@@ -221,6 +222,12 @@ internal static class CoreServicesExtensions
         services.AddHostedService(sp => sp.GetRequiredService<RuntimePulseService>());
         services.AddTickerQ();
         services.AddSingleton<CronSchedulerTickerFunction>();
+
+        // Loop scheduling
+        services.AddSingleton<ClawLoopScheduler>();
+        services.AddSingleton<ILoopControlService>(sp => sp.GetRequiredService<ClawLoopScheduler>());
+        services.AddSingleton<LoopTerminationDetector>();
+        services.AddSingleton<AgentLoopJob>();
         services.AddSingleton<AutomationRunCoordinator>();
         services.AddSingleton<IAutomationRunDispatcher>(sp => sp.GetRequiredService<AutomationRunCoordinator>());
         services.AddSingleton<GatewayAutomationService>();
@@ -243,6 +250,7 @@ internal static class CoreServicesExtensions
         services.AddSingleton<ITool, GetGoalTool>();
         services.AddSingleton<ITool, CreateGoalTool>();
         services.AddSingleton<ITool, UpdateGoalTool>();
+        services.AddSingleton<ITool, LoopControlTool>();
 
         services.AddSingleton<SharedHarnessStateService>();
         services.AddSingleton<CodebaseHarnessMapService>();
