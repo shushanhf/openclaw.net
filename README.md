@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 ![NativeAOT-friendly](https://img.shields.io/badge/NativeAOT-friendly-blue)
 ![Plugin compatibility](https://img.shields.io/badge/plugin%20compatibility-evolving-green)
-![Tools](https://img.shields.io/badge/native%20tools-48-green)
+![Tools](https://img.shields.io/badge/native%20tools-75-green)
 ![Channels](https://img.shields.io/badge/channels-9-green)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/clawdotnet/openclaw.net)
 

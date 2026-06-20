@@ -14,6 +14,7 @@ Use this page as the map. If you are unsure where to go next, the groups below a
 | [../README.md](../README.md) | High-level overview, feature list, and headline capabilities. |
 | [ARCHITECTURE_BOUNDARIES.md](ARCHITECTURE_BOUNDARIES.md) | Core, gateway, extension, AOT/JIT, and Industrial Pack boundaries. |
 | [CAPABILITY_MATRIX.md](CAPABILITY_MATRIX.md) | Core, optional, experimental, and JIT-only capability lanes. |
+| [zh-CN/CAPABILITY_MATRIX.md](zh-CN/CAPABILITY_MATRIX.md) | 能力矩阵（简体中文）。 |
 | [zh-CN/START_HERE.md](zh-CN/START_HERE.md) | Simplified Chinese first-run orientation. |
 
 ## Using It
@@ -22,7 +23,10 @@ Use this page as the map. If you are unsure where to go next, the groups below a
 | --- | --- |
 | [USER_GUIDE.md](USER_GUIDE.md) | Providers, tools, skills, channels, and the day-to-day operator surface. |
 | [RELEASES.md](RELEASES.md) | Desktop download bundles, release assets, and signing/notarization status. |
-| [TOOLS_GUIDE.md](TOOLS_GUIDE.md) | Native tool catalog, behavior, and configuration. |
+| [TOOLS_GUIDE.md](TOOLS_GUIDE.md) | Native tool catalog, behavior, and configuration (75 tools). |
+| [zh-CN/TOOLS_GUIDE.md](zh-CN/TOOLS_GUIDE.md) | 原生工具目录与配置（简体中文，75 个工具）。 |
+| [zh-CN/LOOP_TECHNICAL_ARCHITECTURE.md](zh-CN/LOOP_TECHNICAL_ARCHITECTURE.md) | /loop 定时循环命令技术架构（简体中文）。 |
+| [zh-CN/GOAL_TECHNICAL_ARCHITECTURE.md](zh-CN/GOAL_TECHNICAL_ARCHITECTURE.md) | Goal 目标机制技术架构（简体中文）。 |
 | [SKILLKIT.md](SKILLKIT.md) | Local-first `openclaw skill` workflows for defining, validating, critiquing, packaging, and dry-running reusable OpenClaw skills. |
 | [LOCAL_MODELS.md](LOCAL_MODELS.md) | Embedded local model packages, supervised sidecars, frame-based video support, and experimental LiteRT-LM adapter guidance. |
 | [opensquilla-dynamic-turn-routing.md](opensquilla-dynamic-turn-routing.md) | Independent guide to the OpenSquilla-style dynamic turn-routing surface, current implementation status, runtime wiring, and operator expectations. |
