@@ -25,9 +25,7 @@ internal sealed class GatewayOutboundDeliveryWorker
                     {
                         if (!channelAdapters.TryGetValue(outbound.ChannelId, out var adapter))
                         {
-                            // System channels (like "loop") don't have adapters — silently skip
-                            if (!string.Equals(outbound.ChannelId, "loop", StringComparison.OrdinalIgnoreCase))
-                                logger.LogWarning("Unknown channel {ChannelId} for outbound message to {RecipientId}", outbound.ChannelId, outbound.RecipientId);
+                            logger.LogWarning("Unknown channel {ChannelId} for outbound message to {RecipientId}", outbound.ChannelId, outbound.RecipientId);
                             continue;
                         }
 

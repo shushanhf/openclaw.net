@@ -33,7 +33,7 @@ internal sealed class GatewayAgentLoopDispatcher : IAgentLoopDispatcher
         await _pipeline.InboundWriter.WriteAsync(new InboundMessage
         {
             SessionId = sessionId,
-            ChannelId = "loop",
+            ChannelId = "cron",
             SenderId = "loop",
             Text = prompt,
             IsSystem = true
