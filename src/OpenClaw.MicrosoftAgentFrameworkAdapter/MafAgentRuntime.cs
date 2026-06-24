@@ -3285,6 +3285,7 @@ public sealed class MafAgentRuntime : IAgentRuntime
 
         var record = new TurnTokenUsageRecord
         {
+            CorrelationId = turnContext.CorrelationId,
             SessionId = session.Id,
             ChannelId = session.ChannelId,
             ProviderId = execution.ProviderId,

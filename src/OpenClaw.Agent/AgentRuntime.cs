@@ -446,7 +446,8 @@ public sealed class AgentRuntime : IAgentRuntime
                 response.Usage is null
                     ? LlmExecutionEstimateBuilder.BuildInputTokenEstimate(messages, inputTokens, _skillPromptLength)
                     : new InputTokenComponentEstimate(),
-                isEstimated: response.Usage is null);
+                isEstimated: response.Usage is null,
+                correlationId: turnCtx.CorrelationId);
 
             if (TryRejectContractBudget(session, out contractBudgetMessage))
             {
@@ -689,7 +690,8 @@ public sealed class AgentRuntime : IAgentRuntime
                         isUsageEstimated
                             ? LlmExecutionEstimateBuilder.BuildInputTokenEstimate(messages, streamResult.InputTokens, _skillPromptLength)
                             : new InputTokenComponentEstimate(),
-                        isEstimated: isUsageEstimated);
+                        isEstimated: isUsageEstimated,
+                        correlationId: turnCtx.CorrelationId);
             }
 
             if (TryRejectContractBudget(session, out contractBudgetMessage))
@@ -868,10 +870,12 @@ public sealed class AgentRuntime : IAgentRuntime
         long cacheReadTokens,
         long cacheWriteTokens,
         InputTokenComponentEstimate estimatedInputTokensByComponent,
-        bool isEstimated)
+        bool isEstimated,
+        string? correlationId)
     {
         var record = new TurnTokenUsageRecord
         {
+            CorrelationId = correlationId,
             SessionId = session.Id,
             ChannelId = session.ChannelId,
             ProviderId = providerId,
