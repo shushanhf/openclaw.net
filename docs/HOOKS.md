@@ -8,7 +8,7 @@ contract scope limiting, and external plugin integration.
 
 ## Architecture Overview
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │                    Gateway Startup                            │
 │  CreateHooks()                                               │
