@@ -60,12 +60,12 @@ public interface IToolHook
 {
     string Name { get; }
 
-    Task<bool> BeforeExecuteAsync(
+    ValueTask<bool> BeforeExecuteAsync(
         string toolName,
         string arguments,
         CancellationToken ct);
 
-    Task AfterExecuteAsync(
+    ValueTask AfterExecuteAsync(
         string toolName,
         string arguments,
         string result,
@@ -78,8 +78,8 @@ public interface IToolHook
 | 成员 | 阶段 | 返回值 | 行为 |
 |------|------|--------|------|
 | `Name` | — | `string` | 用于日志的可读标识。 |
-| `BeforeExecuteAsync` | 调用前 | `Task<bool>` | 返回 `false` 拒绝执行。LLM 收到：`"Tool execution denied by hook: {hookName}"`。 |
-| `AfterExecuteAsync` | 调用后 | `Task` | 每次工具执行后调用，即使工具失败也会调用。即发即弃，异常被捕获。 |
+| `BeforeExecuteAsync` | 调用前 | `ValueTask<bool>` | 返回 `false` 拒绝执行。LLM 收到：`"Tool execution denied by hook: {hookName}"`。 |
+| `AfterExecuteAsync` | 调用后 | `ValueTask` | 每次工具执行后调用，即使工具失败也会调用。即发即弃，异常被捕获。 |
 
 ### `IToolHookWithContext`
 
@@ -90,12 +90,15 @@ public interface IToolHook
 ```csharp
 public interface IToolHookWithContext : IToolHook
 {
-    Task<bool> BeforeExecuteAsync(
+    ValueTask<bool> BeforeExecuteAsync(
         ToolHookContext context,
         CancellationToken ct);
 
-    Task AfterExecuteAsync(
+    ValueTask AfterExecuteAsync(
         ToolHookContext context,
+        string result,
+        TimeSpan duration,
+        bool failed,
         CancellationToken ct);
 }
 ```
@@ -297,19 +300,19 @@ public sealed class MyPolicyHook : IToolHook
 {
     public string Name => "my_policy";
 
-    public Task<bool> BeforeExecuteAsync(
+    public ValueTask<bool> BeforeExecuteAsync(
         string toolName, string arguments, CancellationToken ct)
     {
         // 返回 false 拒绝执行。
-        return Task.FromResult(true);
+        return ValueTask.FromResult(true);
     }
 
-    public Task AfterExecuteAsync(
+    public ValueTask AfterExecuteAsync(
         string toolName, string arguments, string result,
         TimeSpan duration, bool failed, CancellationToken ct)
     {
         // 追踪指标、记录日志等。
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
 ```

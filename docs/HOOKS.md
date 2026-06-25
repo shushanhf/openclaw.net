@@ -61,12 +61,12 @@ public interface IToolHook
 {
     string Name { get; }
 
-    Task<bool> BeforeExecuteAsync(
+    ValueTask<bool> BeforeExecuteAsync(
         string toolName,
         string arguments,
         CancellationToken ct);
 
-    Task AfterExecuteAsync(
+    ValueTask AfterExecuteAsync(
         string toolName,
         string arguments,
         string result,
@@ -79,8 +79,8 @@ public interface IToolHook
 | Member | Phase | Return | Behavior |
 |--------|-------|--------|----------|
 | `Name` | — | `string` | Human-readable identifier for logging. |
-| `BeforeExecuteAsync` | Before | `Task<bool>` | Return `false` to deny execution. LLM receives: `"Tool execution denied by hook: {hookName}"`. |
-| `AfterExecuteAsync` | After | `Task` | Called after every tool execution, even if the tool failed. Fire-and-forget; exceptions are caught. |
+| `BeforeExecuteAsync` | Before | `ValueTask<bool>` | Return `false` to deny execution. LLM receives: `"Tool execution denied by hook: {hookName}"`. |
+| `AfterExecuteAsync` | After | `ValueTask` | Called after every tool execution, even if the tool failed. Fire-and-forget; exceptions are caught. |
 
 ### `IToolHookWithContext`
 
@@ -91,12 +91,15 @@ Extends `IToolHook` with overloads that receive a `ToolHookContext` for hooks th
 ```csharp
 public interface IToolHookWithContext : IToolHook
 {
-    Task<bool> BeforeExecuteAsync(
+    ValueTask<bool> BeforeExecuteAsync(
         ToolHookContext context,
         CancellationToken ct);
 
-    Task AfterExecuteAsync(
+    ValueTask AfterExecuteAsync(
         ToolHookContext context,
+        string result,
+        TimeSpan duration,
+        bool failed,
         CancellationToken ct);
 }
 ```
@@ -298,19 +301,19 @@ public sealed class MyPolicyHook : IToolHook
 {
     public string Name => "my_policy";
 
-    public Task<bool> BeforeExecuteAsync(
+    public ValueTask<bool> BeforeExecuteAsync(
         string toolName, string arguments, CancellationToken ct)
     {
         // Return false to deny.
-        return Task.FromResult(true);
+        return ValueTask.FromResult(true);
     }
 
-    public Task AfterExecuteAsync(
+    public ValueTask AfterExecuteAsync(
         string toolName, string arguments, string result,
         TimeSpan duration, bool failed, CancellationToken ct)
     {
         // Track metrics, log, etc.
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
 ```

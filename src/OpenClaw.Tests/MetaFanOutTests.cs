@@ -596,15 +596,15 @@ public sealed class MetaFanOutTests
     private static Task<(string Output, string? FailureCode)> FailFirstChildAsync(
         SkillDefinition _,
         MetaSkillStepDefinition __,
-        string childId,
         string ___,
+        string childInput,
         MetaExecutionContext ____,
         Session _____,
         TurnContext ______,
         CancellationToken _______)
     {
         return Task.FromResult(
-            childId.EndsWith("_0", StringComparison.Ordinal)
+            string.Equals(childInput, "alpha", StringComparison.Ordinal)
                 ? ("boom", (string?)"child_failed")
                 : ("ok", null));
     }
