@@ -21,8 +21,6 @@ Use this map when turning the Markdown docs into a documentation website. It kee
 | Guides | MetaSkill User Guide | [meta-skill-user-guide.md](meta-skill-user-guide.md) |
 | Guides | MetaSkill Authoring Guide | [authoring/meta-skills.md](authoring/meta-skills.md) |
 | Guides | OpenSquilla Meta-Skill Migration | [opensquilla-meta-skill-migration.md](opensquilla-meta-skill-migration.md) |
-| Guides | MetaSkill vs Mode-Step Grid Comparison | [meta-skill-mode-step-grid-comparison.md](meta-skill-mode-step-grid-comparison.md) |
-| Guides | MetaSKILL vs Claude Code Workflows | [meta-skill-vs-claude-code-workflows.md](meta-skill-vs-claude-code-workflows.md) |
 | Guides | OpenSquilla Dynamic Turn Routing | [opensquilla-dynamic-turn-routing.md](opensquilla-dynamic-turn-routing.md) |
 | Guides | Dynamic Routing and Model Profiles | [dynamic-turn-routing-model-profiles.md](dynamic-turn-routing-model-profiles.md) |
 | Guides | External CLI Connectors | [EXTERNAL_CLI_CONNECTORS.md](EXTERNAL_CLI_CONNECTORS.md) |
@@ -73,7 +71,6 @@ Use this map when turning the Markdown docs into a documentation website. It kee
 | International | 中文 MetaSkill 用户指南 | [zh-CN/meta-skill-user-guide.md](zh-CN/meta-skill-user-guide.md) |
 | International | 中文 MetaSkill 功能概览 | [zh-CN/meta-skills.md](zh-CN/meta-skills.md) |
 | International | 中文 MetaSkill 编写指南 | [zh-CN/authoring/meta-skills.md](zh-CN/authoring/meta-skills.md) |
-| International | 中文 MetaSkill vs Mode-Step 网格对比 | [zh-CN/meta-skill-mode-step-grid-comparison.md](zh-CN/meta-skill-mode-step-grid-comparison.md) |
 
 ## Suggested Landing Path
 

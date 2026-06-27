@@ -69,8 +69,6 @@
 | 国际化 | 中文 MetaSkill 用户指南 | [zh-CN/meta-skill-user-guide.md](zh-CN/meta-skill-user-guide.md) |
 | 国际化 | 中文 MetaSkill 功能概览 | [zh-CN/meta-skills.md](zh-CN/meta-skills.md) |
 | 国际化 | 中文 MetaSkill 编写指南 | [zh-CN/authoring/meta-skills.md](zh-CN/authoring/meta-skills.md) |
-| 国际化 | 中文 MetaSkill vs Mode-Step 网格对比 | [zh-CN/meta-skill-mode-step-grid-comparison.md](zh-CN/meta-skill-mode-step-grid-comparison.md) |
-| 国际化 | 中文 MetaSKILL vs Claude Code Workflows | [zh-CN/meta-skill-vs-claude-code-workflows.md](zh-CN/meta-skill-vs-claude-code-workflows.md) |
 
 ## 建议的落地路径
 
