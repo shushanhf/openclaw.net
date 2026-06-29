@@ -92,7 +92,7 @@ src/mcpapp/
   "iconUrl": "https://img.icons8.com/color/48/grocery-store.png",
   "author": "OpenClaw MCP App Demo",
   "license": "MIT",
-  "homepageUrl": "https://github.com/MCPAppsDemo/GroceryInventory.Api",
+  "homepageUrl": "https://github.com/boclifton-MSFT/MCPAppsDemo",
   "tags": ["grocery", "inventory", "retail", "supply-chain", "dashboard"],
   "transport": "http",
   "url": "https://localhost:5001/mcp",
@@ -239,7 +239,7 @@ app.Run();
 
 ## 测试教程：GroceryInventory.Api
 
-[GroceryInventory.Api](https://github.com/MCPAppsDemo/GroceryInventory.Api) 是一个完整的多门店杂货库存管理 MCP App，作为 `OpenClaw.McpApp` 的测试夹具使用。其清单文件位于 `src/mcpapp/test-apps/GroceryInventory/openclaw.mcpapp.json`。
+[GroceryInventory.Api](https://github.com/boclifton-MSFT/MCPAppsDemo) 是一个完整的多门店杂货库存管理 MCP App，作为 `OpenClaw.McpApp` 的测试夹具使用。其清单文件位于 `src/mcpapp/test-apps/GroceryInventory/openclaw.mcpapp.json`。
 
 ### 应用架构
 
