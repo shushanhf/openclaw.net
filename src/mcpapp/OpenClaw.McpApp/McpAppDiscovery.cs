@@ -12,19 +12,13 @@ namespace OpenClaw.McpApp;
 /// and produces a list of <see cref="McpAppInstallState"/> entries.
 /// Handles allow/deny filtering based on <see cref="McpAppsConfig"/>.
 /// </summary>
-public sealed class McpAppDiscovery
+public sealed class McpAppDiscovery(McpAppsConfig config, ILogger<McpAppDiscovery> logger)
 {
-    private readonly McpAppsConfig _config;
-    private readonly ILogger _logger;
+    private readonly McpAppsConfig _config = config;
+    private readonly ILogger _logger = logger;
 
     /// <summary>Filename the discovery scanner looks for.</summary>
     public const string ManifestFileName = "openclaw.mcpapp.json";
-
-    public McpAppDiscovery(McpAppsConfig config, ILogger logger)
-    {
-        _config = config;
-        _logger = logger;
-    }
 
     /// <summary>
     /// Scans all configured discovery paths and returns discovered app states.
