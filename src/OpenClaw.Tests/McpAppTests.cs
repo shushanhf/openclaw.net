@@ -113,6 +113,8 @@ public sealed class McpAppTests : IAsyncDisposable
         Assert.Equal("./workspace", manifest.WorkingDirectory);
         Assert.Equal("Development", manifest.Environment["DOTNET_ENVIRONMENT"]);
         Assert.Equal("test-key", manifest.Headers["X-Api-Key"]);
+        Assert.True(manifest.Headers.ContainsKey("x-api-key"));
+        Assert.Equal("test-key", manifest.Headers["x-api-key"]);
     }
 
     [Fact]
@@ -671,6 +673,24 @@ public sealed class McpAppTests : IAsyncDisposable
         Assert.Equal(McpAppLifecycle.Disabled, state.Lifecycle);
         Assert.Contains(state.ValidationErrors,
             e => e.Contains("allowlist", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void IsAppAllowed_UnsupportedAllowlistSemantics_DeniesApp()
+    {
+        var config = new McpAppsConfig
+        {
+            Enabled = true,
+            AllowlistSemantics = "stict",
+            Allow = [],
+        };
+        var discovery = new McpAppDiscovery(config, NullLogger<McpAppDiscovery>.Instance);
+        var state = CreateState("anything");
+
+        Assert.False(discovery.IsAppAllowed(state));
+        Assert.Equal(McpAppLifecycle.Disabled, state.Lifecycle);
+        Assert.Contains(state.ValidationErrors,
+            e => e.Contains("allowlist semantics", StringComparison.OrdinalIgnoreCase));
     }
 
     // ── McpAppNativeTool (with HTTP MCP server) ────────────────

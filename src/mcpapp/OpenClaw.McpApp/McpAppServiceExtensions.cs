@@ -134,7 +134,14 @@ public sealed class McpAppRegistry : IAsyncDisposable
                 {
                     if (server is not null)
                     {
-                        try { await server.DisposeAsync(); } catch { }
+                        try
+                        {
+                            await server.DisposeAsync();
+                        }
+                        catch (Exception disposeEx)
+                        {
+                            _logger.LogWarning(disposeEx, "Error disposing McpApp server after load failure");
+                        }
                     }
 
                     if (ct.IsCancellationRequested)

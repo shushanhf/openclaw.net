@@ -116,8 +116,12 @@ public sealed class McpAppManifest : IJsonOnDeserialized
 
         Tags ??= [];
         Arguments ??= [];
-        Headers ??= new(StringComparer.OrdinalIgnoreCase);
-        Environment ??= new(StringComparer.Ordinal);
+        Headers = Headers is null
+            ? new(StringComparer.OrdinalIgnoreCase)
+            : new(Headers, StringComparer.OrdinalIgnoreCase);
+        Environment = Environment is null
+            ? new(StringComparer.Ordinal)
+            : new(Environment, StringComparer.Ordinal);
         Capabilities = Capabilities is null || Capabilities.Length == 0 ? ["tools"] : Capabilities;
         Metadata ??= new(StringComparer.Ordinal);
     }

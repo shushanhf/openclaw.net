@@ -420,17 +420,17 @@ GroceryInventory.Api 的 MCP 工具结构在 `McpAppTests.cs` 中有镜像测试
 ```bash
 cd e:\GitHub\openclaw.net
 dotnet test src/OpenClaw.Tests --filter "FullyQualifiedName~McpAppTests"
-# 输出：通过! - 失败: 0，通过: 46
+# 输出：通过! - 失败: 0，通过: 47
 ```
 
-MCP App 模块包含完整的单元测试覆盖（46 个测试用例），涵盖：
+MCP App 模块包含完整的单元测试覆盖（47 个测试用例），涵盖：
 
 | 测试类别 | 测试数 | 覆盖范围 |
 |---------|--------|---------|
 | 清单序列化 | 4 | JSON 往返、最小 JSON 默认值、stdio 传输、无效 JSON |
 | 安装状态 | 3 | 默认值、生命周期转换时间戳、验证错误 |
 | InfoProvider | 3 | 基本属性、名称回退、描述符管理 |
-| 发现 | 15 | 禁用、无效路径、加载、嵌套扫描、字段验证、不支持传输、allow/deny、strict allowlist、glob |
+| 发现 | 16 | 禁用、无效路径、加载、嵌套扫描、字段验证、不支持传输、allow/deny、strict allowlist、无效 allowlist 语义、glob |
 | NativeTool | 4 | HTTP 调用、带参调用、无效 JSON、数组 JSON |
 | 服务器 | 8 | 连接、幂等、断开、失败、Dispose、前缀、传输覆盖规范化 |
 | 注册表 | 4 | 失败优雅降级、未找到、幂等、双次 Dispose |

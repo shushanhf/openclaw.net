@@ -90,7 +90,15 @@ public sealed class McpAppServer : IAsyncDisposable
 
             if (_client is not null)
             {
-                try { await DisposeClientAsync(_client); } catch { }
+                try
+                {
+                    await DisposeClientAsync(_client);
+                }
+                catch (Exception disposeEx)
+                {
+                    _logger.LogWarning(disposeEx, "Error disposing failed McpApp client for '{AppId}'", _state.Manifest.Id);
+                }
+
                 _client = null;
             }
 

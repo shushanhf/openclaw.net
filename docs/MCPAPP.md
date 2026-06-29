@@ -413,19 +413,19 @@ GroceryInventory.Api's MCP tool structure has a mirror test class `GroceryMcpToo
 ```bash
 cd e:\GitHub\openclaw.net
 dotnet test src/OpenClaw.Tests --filter "FullyQualifiedName~McpAppTests"
-# Output: Passed! - Failed: 0, Passed: 46
+# Output: Passed! - Failed: 0, Passed: 47
 ```
 
 ## Testing
 
-The MCP App module has comprehensive unit test coverage (46 test cases):
+The MCP App module has comprehensive unit test coverage (47 test cases):
 
 | Test Category | Count | Coverage |
 |---------------|-------|----------|
 | Manifest serialization | 4 | JSON round-trip, minimal JSON defaults, stdio transport, invalid JSON |
 | Install state | 3 | Defaults, lifecycle transition timestamps, validation errors |
 | InfoProvider | 3 | Basic properties, name fallback, descriptor management |
-| Discovery | 15 | Disabled return, invalid paths, valid loading, nested scan, required field validation, unsupported transport, invalid JSON skip, allow/deny, strict allowlist semantics, glob matching, entry config disable |
+| Discovery | 16 | Disabled return, invalid paths, valid loading, nested scan, required field validation, unsupported transport, invalid JSON skip, allow/deny, strict allowlist semantics, invalid allowlist semantics, glob matching, entry config disable |
 | NativeTool | 4 | HTTP invocation, argument passing, invalid JSON error, array JSON error |
 | Server | 8 | Connection enumeration, idempotent reconnect, disconnect state transition, invalid command failure, Dispose cleanup, manifest/entryConfig prefix override, transport override normalization |
 | Registry | 4 | Graceful degradation on failure, GetApp not found, idempotent loading, double Dispose |

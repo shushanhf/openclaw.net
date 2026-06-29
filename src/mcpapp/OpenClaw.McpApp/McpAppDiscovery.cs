@@ -109,21 +109,24 @@ public sealed class McpAppDiscovery(McpAppsConfig config, ILogger<McpAppDiscover
             }
         }
 
+        var allowlistSemantics = (_config.AllowlistSemantics ?? "legacy").Trim();
+        if (!string.Equals(allowlistSemantics, "legacy", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(allowlistSemantics, "strict", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("Unsupported AllowlistSemantics '{AllowlistSemantics}'", _config.AllowlistSemantics);
+            state.Lifecycle = McpAppLifecycle.Disabled;
+            state.ValidationErrors.Add(
+                $"Unsupported allowlist semantics '{_config.AllowlistSemantics}'. Use 'legacy' or 'strict'.");
+            return false;
+        }
+
         // Check allowlist. Legacy mode keeps the historical empty-allowlist behavior,
         // while strict mode requires an explicit match.
         var requireAllowlistMatch = _config.Allow.Length > 0 ||
-            string.Equals(_config.AllowlistSemantics, "strict", StringComparison.OrdinalIgnoreCase);
+            string.Equals(allowlistSemantics, "strict", StringComparison.OrdinalIgnoreCase);
         if (requireAllowlistMatch)
         {
-            var isAllowed = false;
-            foreach (var allowed in _config.Allow)
-            {
-                if (MatchesGlob(appId, allowed))
-                {
-                    isAllowed = true;
-                    break;
-                }
-            }
+            var isAllowed = _config.Allow.Any(allowed => MatchesGlob(appId, allowed));
 
             if (!isAllowed)
             {
