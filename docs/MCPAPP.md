@@ -104,7 +104,7 @@ src/mcpapp/
   "iconUrl": "https://img.icons8.com/color/48/grocery-store.png",
   "author": "OpenClaw MCP App Demo",
   "license": "MIT",
-  "homepageUrl": "https://github.com/MCPAppsDemo/GroceryInventory.Api",
+  "homepageUrl": "https://github.com/boclifton-MSFT/MCPAppsDemo",
   "tags": ["grocery", "inventory", "retail", "supply-chain", "dashboard"],
   "transport": "http",
   "url": "https://localhost:5001/mcp",
@@ -252,7 +252,7 @@ For MCP Apps that include an interactive UI (such as GroceryInventory.Api's dash
 
 ## Testing Tutorial: GroceryInventory.Api
 
-[GroceryInventory.Api](https://github.com/MCPAppsDemo/GroceryInventory.Api) is a complete multi-store grocery inventory management MCP App, used as the test fixture for `OpenClaw.McpApp`. Its manifest lives at `src/mcpapp/test-apps/GroceryInventory/openclaw.mcpapp.json`.
+[GroceryInventory.Api](https://github.com/boclifton-MSFT/MCPAppsDemo) is a complete multi-store grocery inventory management MCP App, used as the test fixture for `OpenClaw.McpApp`. Its manifest lives at `src/mcpapp/test-apps/GroceryInventory/openclaw.mcpapp.json`.
 
 ### Application Architecture
 

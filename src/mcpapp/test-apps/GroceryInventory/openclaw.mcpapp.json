@@ -7,7 +7,7 @@
   "iconUrl": "https://img.icons8.com/color/48/grocery-store.png",
   "author": "OpenClaw MCP App Demo",
   "license": "MIT",
-  "homepageUrl": "https://github.com/MCPAppsDemo/GroceryInventory.Api",
+  "homepageUrl": "https://github.com/boclifton-MSFT/MCPAppsDemo",
   "tags": ["grocery", "inventory", "retail", "supply-chain", "dashboard"],
   "transport": "http",
   "url": "https://localhost:5001/mcp",
