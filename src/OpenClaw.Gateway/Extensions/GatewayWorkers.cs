@@ -46,6 +46,19 @@ internal static class GatewayWorkers
     {
         new GatewaySessionCleanupWorker().Start(lifetime, logger, sessionManager);
 
+        // Start background session recovery if enabled
+        if (config.BackgroundExecution.Enabled && config.BackgroundExecution.AutoResumeOnStartup)
+        {
+            var backgroundStore = sessionManager.Store as IBackgroundSessionStore;
+            var recoveryWorker = new Background.BackgroundSessionRecoveryWorker(
+                backgroundStore, pipeline, config, null!);
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), lifetime.ApplicationStopping);
+                await recoveryWorker.RecoverOnceAsync(lifetime.ApplicationStopping);
+            });
+        }
+
         new GatewayInboundMessageWorker().Start(
             lifetime,
             logger,

@@ -710,6 +710,43 @@ internal sealed class GatewayInboundMessageWorker
                                     }, lifetime.ApplicationStopping);
                                 }
 
+                                // Lifecycle notifications for background task terminal states
+                                if (session.BackgroundRun is not null && !turnResult.ShouldContinue)
+                                {
+                                    var notifyText = turnResult.StopReason switch
+                                    {
+                                        AgentTurnStopReason.Completed => $"Background task completed: {turnResult.Text}",
+                                        AgentTurnStopReason.Blocked => $"Background task blocked: {turnResult.Text}",
+                                        AgentTurnStopReason.BudgetLimited => $"Background task paused: budget reached — {turnResult.Text}",
+                                        AgentTurnStopReason.Failed => $"Background task failed: {turnResult.Text}",
+                                        _ => null
+                                    };
+
+                                    if (notifyText is not null)
+                                    {
+                                        var shouldNotify = turnResult.StopReason switch
+                                        {
+                                            AgentTurnStopReason.Completed => config.BackgroundExecution.NotifyOnCompletion,
+                                            AgentTurnStopReason.Blocked => config.BackgroundExecution.NotifyOnBlocked,
+                                            AgentTurnStopReason.BudgetLimited => config.BackgroundExecution.NotifyOnBudgetLimited,
+                                            _ => false
+                                        };
+
+                                        if (shouldNotify)
+                                        {
+                                            await pipeline.OutboundWriter.WriteAsync(new OutboundMessage
+                                            {
+                                                ChannelId = msg.ChannelId,
+                                                RecipientId = conversationRecipientId,
+                                                AccountId = msg.AccountId,
+                                                Text = notifyText,
+                                                SessionId = session.Id,
+                                                ReplyToMessageId = msg.MessageId
+                                            }, lifetime.ApplicationStopping);
+                                        }
+                                    }
+                                }
+
                                 if (learningService is not null)
                                     await learningService.ObserveSessionAsync(session, processingCt);
 
