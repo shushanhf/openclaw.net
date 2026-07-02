@@ -9,6 +9,7 @@ namespace OpenClaw.Tests;
 public sealed class BackgroundSessionStoreTests : IAsyncDisposable
 {
     private readonly List<string> _tempDirs = [];
+    private readonly List<string> _tempFiles = [];
 
     [Fact]
     public async Task FileStore_ListsOnlyRunnableBackgroundSessions()
@@ -27,7 +28,7 @@ public sealed class BackgroundSessionStoreTests : IAsyncDisposable
     [Fact]
     public async Task SqliteStore_ListsOnlyRunnableBackgroundSessions()
     {
-        var db = Path.Combine(Path.GetTempPath(), "openclaw-bg-" + Guid.NewGuid().ToString("N") + ".db");
+        var db = NewTempFile("bg-sqlite-basic", ".db");
         using var store = new SqliteMemoryStore(db, enableFts: false);
         await SeedSessionsAsync(store, TestContext.Current.CancellationToken);
 
@@ -45,20 +46,18 @@ public sealed class BackgroundSessionStoreTests : IAsyncDisposable
         await using var store = new FileMemoryStore(dir);
         var ct = TestContext.Current.CancellationToken;
 
-        // Create 5 runnable sessions with different LastContinuedAtUtc timestamps
+        // Create 5 runnable sessions with different LastContinuedAtUtc timestamps.
         for (var i = 0; i < 5; i++)
         {
             var session = NewSession($"websocket:bg{i}", SessionRunState.Continuing);
-            session.BackgroundRun!.LastContinuedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-(5 - i)); // oldest to newest
+            session.BackgroundRun!.LastContinuedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-(5 - i));
             await store.SaveSessionAsync(session, ct);
         }
 
         var backgroundStore = Assert.IsAssignableFrom<IBackgroundSessionStore>(store);
-        // Request only 2 — should return the oldest 2 (oldest-first recovery order)
         var sessions = await backgroundStore.ListBackgroundRunnableSessionsAsync(2, ct);
 
         Assert.Equal(2, sessions.Count);
-        // Oldest first
         Assert.Equal("websocket:bg0", sessions[0].Id);
         Assert.Equal("websocket:bg1", sessions[1].Id);
     }
@@ -67,8 +66,7 @@ public sealed class BackgroundSessionStoreTests : IAsyncDisposable
     public async Task FileStore_ToleratesCorruptFile_ReturnsValidSessions()
     {
         var dir = NewTempDir("bg-file-corrupt");
-        // Write a corrupt JSON file alongside valid sessions
-        var corruptPath = Path.Combine(dir, "corrupt.json");
+        var corruptPath = Path.Join(dir, "corrupt.json");
         await File.WriteAllTextAsync(corruptPath, "{ this is not valid json !! }", TestContext.Current.CancellationToken);
 
         await using var store = new FileMemoryStore(dir);
@@ -88,21 +86,30 @@ public sealed class BackgroundSessionStoreTests : IAsyncDisposable
         {
             try { Directory.Delete(dir, recursive: true); } catch { /* best-effort cleanup */ }
         }
+
+        foreach (var file in _tempFiles)
+        {
+            try { File.Delete(file); } catch { /* best-effort cleanup */ }
+            try { File.Delete(file + "-wal"); } catch { /* best-effort cleanup */ }
+            try { File.Delete(file + "-shm"); } catch { /* best-effort cleanup */ }
+        }
+
         GC.SuppressFinalize(this);
     }
 
     [Fact]
     public async Task SqliteStore_ReturnsRecoveryOrder_WhenMoreThanLimit()
     {
-        var db = Path.Combine(Path.GetTempPath(), "openclaw-bg-sqlite-order-" + Guid.NewGuid().ToString("N") + ".db");
+        var db = NewTempFile("bg-sqlite-order", ".db");
         using var store = new SqliteMemoryStore(db, enableFts: false);
         var ct = TestContext.Current.CancellationToken;
 
-        // Create 5 runnable sessions with different LastContinuedAtUtc timestamps
-        for (var i = 0; i < 5; i++)
+        // Save newer recovery candidates first, then older candidates last. This
+        // guards against limiting by updated_at before sorting by recovery time.
+        for (var i = 0; i < 10; i++)
         {
             var session = NewSession($"websocket:bg{i}", SessionRunState.Continuing);
-            session.BackgroundRun!.LastContinuedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-(5 - i));
+            session.BackgroundRun!.LastContinuedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-i);
             await store.SaveSessionAsync(session, ct);
         }
 
@@ -110,14 +117,14 @@ public sealed class BackgroundSessionStoreTests : IAsyncDisposable
         var sessions = await backgroundStore.ListBackgroundRunnableSessionsAsync(2, ct);
 
         Assert.Equal(2, sessions.Count);
-        Assert.Equal("websocket:bg0", sessions[0].Id);
-        Assert.Equal("websocket:bg1", sessions[1].Id);
+        Assert.Equal("websocket:bg9", sessions[0].Id);
+        Assert.Equal("websocket:bg8", sessions[1].Id);
     }
 
     [Fact]
     public async Task SqliteStore_ToleratesCorruptRow_ReturnsValidSessions()
     {
-        var db = Path.Combine(Path.GetTempPath(), "openclaw-bg-sqlite-corrupt-" + Guid.NewGuid().ToString("N") + ".db");
+        var db = NewTempFile("bg-sqlite-corrupt", ".db");
         var ct = TestContext.Current.CancellationToken;
 
         // Seed valid sessions first
@@ -148,10 +155,17 @@ public sealed class BackgroundSessionStoreTests : IAsyncDisposable
 
     private string NewTempDir(string suffix)
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"openclaw-{suffix}-{Guid.NewGuid():N}");
+        var dir = Path.Join(Path.GetTempPath(), $"openclaw-{suffix}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         _tempDirs.Add(dir);
         return dir;
+    }
+
+    private string NewTempFile(string suffix, string extension)
+    {
+        var file = Path.Join(Path.GetTempPath(), $"openclaw-{suffix}-{Guid.NewGuid():N}{extension}");
+        _tempFiles.Add(file);
+        return file;
     }
 
     private static async Task SeedSessionsAsync(IMemoryStore store, CancellationToken ct)

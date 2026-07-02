@@ -532,6 +532,59 @@ public sealed class GatewayWorkersTests
     }
 
     [Fact]
+    public void ShouldUseStreaming_DisablesStreamingForBackgroundContinuations()
+    {
+        var wsChannel = new WebSocketChannel(new WebSocketConfig());
+        var socket = new TestWebSocket();
+        Assert.True(wsChannel.TryAddConnectionForTest("ws-user", socket, IPAddress.Loopback, useJsonEnvelope: true));
+
+        Assert.True(GatewayInboundMessageWorker.ShouldUseStreaming(new InboundMessage
+        {
+            ChannelId = "websocket",
+            SenderId = "ws-user",
+            Text = "hello"
+        }, wsChannel));
+
+        Assert.False(GatewayInboundMessageWorker.ShouldUseStreaming(new InboundMessage
+        {
+            ChannelId = "websocket",
+            SenderId = "ws-user",
+            Text = "continue",
+            Type = BackgroundMessageTypes.AutoContinue,
+            IsSystem = true
+        }, wsChannel));
+    }
+
+    [Fact]
+    public async Task RequeueBackgroundContinuation_WritesContinuationBackToInboundPipeline()
+    {
+        var pipeline = new MessagePipeline();
+        var message = new InboundMessage
+        {
+            ChannelId = "websocket",
+            SenderId = "ws-user",
+            SessionId = "websocket:ws-user",
+            Text = "continue",
+            Type = BackgroundMessageTypes.AutoContinue,
+            IsSystem = true,
+            BackgroundRunId = "bg_1",
+            BackgroundContinuationSequence = 3
+        };
+
+        GatewayInboundMessageWorker.RequeueBackgroundContinuation(
+            pipeline,
+            message,
+            TimeSpan.Zero,
+            TestContext.Current.CancellationToken,
+            NullLogger.Instance);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var requeued = await pipeline.InboundReader.ReadAsync(timeout.Token);
+
+        Assert.Equal(message, requeued);
+    }
+
+    [Fact]
     public async Task Start_ApprovalTimeout_RecordsTimedOutAuditAndRuntimeEvent()
     {
         var storagePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "openclaw-worker-tests", Guid.NewGuid().ToString("N"));

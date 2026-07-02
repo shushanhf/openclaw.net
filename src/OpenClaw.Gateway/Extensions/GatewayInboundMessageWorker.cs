@@ -522,7 +522,7 @@ internal sealed class GatewayInboundMessageWorker
                             {
                                 messageText = string.IsNullOrWhiteSpace(messageText) ? mediaMarker : $"{mediaMarker}\n{messageText}";
                             }
-                            var useStreaming = msg.ChannelId == "websocket" && wsChannel.IsClientUsingEnvelopes(msg.SenderId);
+                            var useStreaming = ShouldUseStreaming(msg, wsChannel);
 
                             var approvalCallback = ToolApprovalCallbackFactory.Create(
                                 config,
@@ -586,7 +586,12 @@ internal sealed class GatewayInboundMessageWorker
 
                                     if (streamLimiterReleaser is null && Background.BackgroundExecutionLimiter.IsBackgroundContinuation(msg))
                                     {
-                                        // Background concurrency exhausted — drop this turn
+                                        RequeueBackgroundContinuation(
+                                            pipeline,
+                                            msg,
+                                            TimeSpan.FromSeconds(1),
+                                            lifetime.ApplicationStopping,
+                                            logger);
                                         await wsChannel.SendStreamEventAsync(
                                             msg.SenderId, "text_delta",
                                             "\n\nBackground execution concurrency limit reached. Turn will be retried.",
@@ -700,8 +705,12 @@ internal sealed class GatewayInboundMessageWorker
 
                                     if (limiterReleaser is null && Background.BackgroundExecutionLimiter.IsBackgroundContinuation(msg))
                                     {
-                                        // Background concurrency exhausted — drop this turn; it will be
-                                        // re-enqueued by the requeue path when a permit is available.
+                                        RequeueBackgroundContinuation(
+                                            pipeline,
+                                            msg,
+                                            TimeSpan.FromSeconds(1),
+                                            lifetime.ApplicationStopping,
+                                            logger);
                                         responseText = "Background execution concurrency limit reached. Turn will be retried.";
                                         continue;
                                     }
@@ -1007,6 +1016,41 @@ internal sealed class GatewayInboundMessageWorker
         }
 
         return null;
+    }
+
+    internal static bool ShouldUseStreaming(InboundMessage msg, WebSocketChannel wsChannel)
+        => !Background.BackgroundExecutionLimiter.IsBackgroundContinuation(msg)
+        && string.Equals(msg.ChannelId, "websocket", StringComparison.Ordinal)
+        && wsChannel.IsClientUsingEnvelopes(msg.SenderId);
+
+    internal static void RequeueBackgroundContinuation(
+        MessagePipeline pipeline,
+        InboundMessage msg,
+        TimeSpan delay,
+        CancellationToken ct,
+        ILogger logger)
+    {
+        if (!Background.BackgroundExecutionLimiter.IsBackgroundContinuation(msg))
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (delay > TimeSpan.Zero)
+                    await Task.Delay(delay, ct);
+
+                await pipeline.InboundWriter.WriteAsync(msg, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Gateway is stopping; do not requeue background work.
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to requeue background continuation for session {SessionId}", msg.SessionId);
+            }
+        }, CancellationToken.None);
     }
 
     private static void ObserveBackgroundTask(Task task, ILogger logger, string operation)

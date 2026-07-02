@@ -215,8 +215,7 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
         await conn.OpenAsync(ct);
 
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT json FROM sessions ORDER BY updated_at ASC LIMIT $limit;";
-        cmd.Parameters.AddWithValue("$limit", Math.Max(limit * 4, limit));
+        cmd.CommandText = "SELECT json FROM sessions ORDER BY updated_at ASC;";
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -228,8 +227,13 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
                 var json = reader.GetString(0);
                 session = JsonSerializer.Deserialize(json, CoreJsonContext.Default.Session);
             }
-            catch
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Skipping corrupt session row during background recovery scan");
                 session = null;
             }
 
