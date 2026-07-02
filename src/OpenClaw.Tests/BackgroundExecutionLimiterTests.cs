@@ -109,6 +109,9 @@ public sealed class BackgroundExecutionLimiterTests
     {
         var msg = new InboundMessage
         {
+            ChannelId = "websocket",
+            SenderId = "user1",
+            Text = "continue",
             Type = BackgroundMessageTypes.AutoContinue,
             IsSystem = true
         };
@@ -120,6 +123,9 @@ public sealed class BackgroundExecutionLimiterTests
     {
         var msg = new InboundMessage
         {
+            ChannelId = "websocket",
+            SenderId = "user1",
+            Text = "resume",
             Type = BackgroundMessageTypes.AutoResume,
             IsSystem = true
         };

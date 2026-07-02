@@ -77,12 +77,12 @@ public sealed class BackgroundSessionModelTests
     }
 
     [Fact]
-    public void GatewayConfig_BackgroundExecution_DefaultsToEnabledAndAutoResume()
+    public void GatewayConfig_BackgroundExecution_DefaultsToDisabled()
     {
         var config = new GatewayConfig();
 
-        Assert.True(config.BackgroundExecution.Enabled);
-        Assert.True(config.BackgroundExecution.AutoResumeOnStartup);
+        Assert.False(config.BackgroundExecution.Enabled);
+        Assert.False(config.BackgroundExecution.AutoResumeOnStartup);
         Assert.Equal(3, config.BackgroundExecution.MaxConcurrentBackgroundTurns);
         Assert.Equal(20, config.BackgroundExecution.MaxIterationsPerBatch);
         Assert.Equal(128_000, config.BackgroundExecution.DefaultTokenBudget);

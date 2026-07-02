@@ -54,7 +54,8 @@ internal static class GatewayWorkers
                     "Background execution requires an IBackgroundSessionStore implementation. " +
                     "The configured IMemoryStore does not support background session queries.");
             var recoveryWorker = new Background.BackgroundSessionRecoveryWorker(
-                backgroundStore, pipeline, config, logger);
+                backgroundStore, pipeline, config,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<Background.BackgroundSessionRecoveryWorker>.Instance);
             _ = Task.Run(async () =>
             {
                 await Task.Delay(TimeSpan.FromSeconds(2), lifetime.ApplicationStopping);

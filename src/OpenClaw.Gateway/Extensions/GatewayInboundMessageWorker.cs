@@ -688,6 +688,8 @@ internal sealed class GatewayInboundMessageWorker
                                 if (!string.IsNullOrWhiteSpace(effectiveResponseMode))
                                     session.ResponseMode = effectiveResponseMode!;
 
+                                var responseText = string.Empty;
+
                                 AgentTurnResult turnResult;
                                 Background.BackgroundExecutionLimiter.Releaser? limiterReleaser = null;
                                 try
@@ -705,14 +707,13 @@ internal sealed class GatewayInboundMessageWorker
                                     }
 
                                     turnResult = await agentRuntime.RunTurnAsync(session, messageText, processingCt, approvalCallback: approvalCallback);
+                                    responseText = turnResult.Text;
                                 }
                                 finally
                                 {
                                     limiterReleaser?.Dispose();
                                     session.ResponseMode = originalResponseMode;
                                 }
-
-                                var responseText = turnResult.Text;
 
                                 await sessionManager.PersistAsync(session, processingCt, sessionLockHeld: true);
 
@@ -728,6 +729,7 @@ internal sealed class GatewayInboundMessageWorker
                                         MaxContinuationTurns = config.BackgroundExecution.MaxContinuationTurns
                                     };
 
+                                    session.RunState = SessionRunState.Continuing;
                                     session.BackgroundRun.ContinuationCount++;
                                     session.BackgroundRun.ContinuationSequence++;
                                     session.BackgroundRun.LastContinuedAtUtc = DateTimeOffset.UtcNow;
