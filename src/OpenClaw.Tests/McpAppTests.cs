@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.ComponentModel;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -13,6 +14,7 @@ using OpenClaw.Agent.Plugins;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
+using OpenClaw.Gateway.Mcp;
 using OpenClaw.McpApp;
 using OpenClaw.McpApp.Models;
 using OpenClaw.McpApp.Shared;
@@ -867,6 +869,114 @@ public sealed class McpAppTests : IAsyncDisposable
         }
     }
 
+    [Fact]
+    public async Task Server_ConnectAsync_PreservesToolUiMetadata()
+    {
+        var serverUrl = await StartMetadataMcpServerAsync();
+        var manifest = new McpAppManifest
+        {
+            Id = "ui-app",
+            Name = "UI App",
+            Version = "1.0",
+            Transport = "http",
+            Url = serverUrl,
+        };
+        var state = new McpAppInstallState
+        {
+            Manifest = manifest,
+            ManifestPath = "/f/openclaw.mcpapp.json",
+            RootPath = "/f",
+        };
+        var server = new McpAppServer(state, null, NullLogger<McpAppServer>.Instance);
+        try
+        {
+            var infoProvider = await server.ConnectAsync(TestContext.Current.CancellationToken);
+
+            var uiTool = Assert.Single(infoProvider.GetToolDescriptors(), t => t.RemoteName == "show_dashboard");
+            Assert.Equal("ui://inventory/dashboard.html", uiTool.UiResourceUri);
+            Assert.True(uiTool.Meta.ContainsKey("ui"));
+        }
+        finally
+        {
+            await server.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task RegisterMcpAppToolsAsync_SkipsAppOnlyTools()
+    {
+        var dir = CreateTempManifestDir("ui-app", new McpAppManifest
+        {
+            Id = "ui-app",
+            Name = "UI App",
+            Version = "1.0",
+            Transport = "http",
+            Url = await StartMetadataMcpServerAsync(),
+            ToolNamePrefix = "uiapp.",
+        });
+        try
+        {
+            var config = new McpAppsConfig
+            {
+                Enabled = true,
+                DiscoveryPaths = [dir],
+            };
+            await using var registry = new McpAppRegistry(
+                config,
+                new McpAppDiscovery(config, NullLogger<McpAppDiscovery>.Instance),
+                NullLoggerFactory.Instance);
+            using var nativeRegistry = new NativePluginRegistry(new NativePluginsConfig(), NullLogger.Instance, new ToolingConfig());
+
+            await registry.RegisterMcpAppToolsAsync(nativeRegistry, config, TestContext.Current.CancellationToken);
+
+            Assert.Contains(nativeRegistry.Tools, t => t.Name == "uiapp.show_dashboard");
+            Assert.DoesNotContain(nativeRegistry.Tools, t => t.Name == "uiapp.app_only_tool");
+        }
+        finally
+        {
+            TryDeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public async Task RegisterMcpAppToolsAsync_UiToolsSuppressStructuredContent()
+    {
+        var dir = CreateTempManifestDir("ui-app", new McpAppManifest
+        {
+            Id = "ui-app",
+            Name = "UI App",
+            Version = "1.0",
+            Transport = "http",
+            Url = await StartMetadataMcpServerAsync(),
+            ToolNamePrefix = "uiapp.",
+        });
+        try
+        {
+            var config = new McpAppsConfig
+            {
+                Enabled = true,
+                DiscoveryPaths = [dir],
+            };
+            await using var registry = new McpAppRegistry(
+                config,
+                new McpAppDiscovery(config, NullLogger<McpAppDiscovery>.Instance),
+                NullLoggerFactory.Instance);
+            using var nativeRegistry = new NativePluginRegistry(new NativePluginsConfig(), NullLogger.Instance, new ToolingConfig());
+
+            await registry.RegisterMcpAppToolsAsync(nativeRegistry, config, TestContext.Current.CancellationToken);
+
+            var uiTool = Assert.Single(nativeRegistry.Tools, t => t.Name == "uiapp.show_dashboard");
+            var result = await uiTool.ExecuteAsync("{}", TestContext.Current.CancellationToken);
+
+            Assert.Contains("called:show_dashboard", result, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"ok\":true", result, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(dir);
+        }
+    }
+
     // ── McpAppServer ────────────────────────────────────────────
 
     [Fact]
@@ -1401,6 +1511,66 @@ public sealed class McpAppTests : IAsyncDisposable
         _apps.Add(app);
         var address = app.Urls.Single();
         return ($"{address.TrimEnd('/')}/mcp", tracker);
+    }
+
+    private async Task<string> StartMetadataMcpServerAsync()
+    {
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services.AddMcpServer(options =>
+            {
+                options.ServerInfo = new Implementation
+                {
+                    Name = "metadata-mcp-app",
+                    Version = "1.0.0"
+                };
+            })
+            .WithHttpTransport(options => { options.Stateless = true; })
+            .WithListToolsHandler((_, _) => ValueTask.FromResult(new ListToolsResult
+            {
+                Tools =
+                [
+                    new Tool
+                    {
+                        Name = "show_dashboard",
+                        Description = "Render the dashboard",
+                        InputSchema = JsonSerializer.SerializeToElement(new { type = "object", properties = new { } }),
+                        Meta = new JsonObject
+                        {
+                            ["ui"] = new JsonObject
+                            {
+                                ["visibility"] = new JsonArray("model", "app"),
+                                ["resourceUri"] = "ui://inventory/dashboard.html"
+                            }
+                        }
+                    },
+                    new Tool
+                    {
+                        Name = "app_only_tool",
+                        Description = "App only tool",
+                        InputSchema = JsonSerializer.SerializeToElement(new { type = "object", properties = new { } }),
+                        Meta = new JsonObject
+                        {
+                            ["ui"] = new JsonObject
+                            {
+                                ["visibility"] = new JsonArray("app")
+                            }
+                        }
+                    }
+                ]
+            }))
+            .WithCallToolHandler((ctx, _) => ValueTask.FromResult(new CallToolResult
+            {
+                Content = [new TextContentBlock { Text = $"called:{ctx.Params?.Name}" }],
+                StructuredContent = JsonSerializer.SerializeToElement(new { ok = true, name = ctx.Params?.Name })
+            }));
+
+        var app = builder.Build();
+        app.MapMcp("/mcp");
+
+        await app.StartAsync();
+        _apps.Add(app);
+        return app.Urls.Single().TrimEnd('/') + "/mcp";
     }
 
     private static async Task TrackMcpMethodAsync(HttpContext context, McpAppCallTracker tracker)

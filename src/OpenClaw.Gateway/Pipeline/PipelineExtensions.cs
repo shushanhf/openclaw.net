@@ -15,6 +15,9 @@ namespace OpenClaw.Gateway.Pipeline;
 
 internal static class PipelineExtensions
 {
+    internal static string CorsAllowHeaders
+        => "Authorization, Content-Type, X-CSRF-Token, mcp-protocol-version, Mcp-Session-Id";
+
     public static void UseOpenClawPipeline(
         this WebApplication app,
         GatewayStartupContext startup,
@@ -119,7 +122,7 @@ internal static class PipelineExtensions
                 {
                     ctx.Response.Headers["Access-Control-Allow-Origin"] = originStr;
                     ctx.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-                    ctx.Response.Headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
+                    ctx.Response.Headers["Access-Control-Allow-Headers"] = CorsAllowHeaders;
                     ctx.Response.Headers["Access-Control-Max-Age"] = "3600";
                     ctx.Response.Headers.Vary = "Origin";
                 }

@@ -105,6 +105,8 @@ Gateway 完成启动后会打印明确的阶段标记、最终的 `OpenClaw gate
 | 集成 API | `http://127.0.0.1:18789/api/integration/status` |
 | MCP 端点 | `http://127.0.0.1:18789/mcp` |
 
+如果你要通过 OpenClaw.NET 托管一个 MCP App 的浏览器 UI，不要让浏览器直接连接 App 自己的上游 MCP URL。正确入口是：先通过 `/apps/health` 发现 App，再让浏览器侧 MCP client 连接 `/apps/mcp/{appId}`，聊天宿主事件走 `/apps/chat`。详细说明见 [docs/zh-CN/MCPAPP.md](docs/zh-CN/MCPAPP.md)。
+
 根 URL 重定向到 `/chat`。完整的首次运行指南（包括"前 10 分钟"操作手册和调试流程），参见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。在修改代码前了解项目结构和仓库地图，参见 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)。
 
 如果需要直接的 gateway 后备方案而非完整的 CLI 引导流程，运行：

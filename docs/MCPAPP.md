@@ -27,6 +27,35 @@ MCP App is designed for MCP applications that need to be **packaged and distribu
 - MCP App UI resource detection (`text/html;profile=mcp-app`)
 - Six-stage lifecycle tracking (Discovered → Validated → Loaded → Running → Stopped → Failed)
 - Seamless integration with `NativePluginRegistry` — discovered tools become immediately available to the Agent
+- Browser host endpoints that let an MCP App UI reuse the same connected upstream MCP session as the Agent
+
+## Browser Host Endpoints
+
+OpenClaw.NET exposes a small gateway-facing host surface for browser-side MCP App UIs:
+
+| Route | Purpose |
+|-------|---------|
+| `/apps/health` | Returns the selected MCP App id plus the gateway MCP endpoint the browser should connect to |
+| `/apps/chat` | Streams chat-host SSE events (`session`, `text`, `tool`, `result`, `done`) into the existing `GatewayAppRuntime` |
+| `/apps/mcp/{appId}` | Proxies MCP requests to the already connected `McpClient` for that App |
+
+The important detail is that browser UIs should connect to `/apps/mcp/{appId}`, not directly to the App's raw upstream MCP URL. That keeps browser-driven MCP calls and model-driven MCP calls on the same OpenClaw-managed session.
+
+### Session Reuse Behavior
+
+- `/apps/health` returns an `mcp` URL that points back to the gateway's own `/apps/mcp/{appId}` route.
+- `/apps/mcp/{appId}` forwards `tools/list`, `resources/list`, `resources/read`, and `tools/call` to the App already loaded in `McpAppRegistry`.
+- When the browser includes `?sessionId=...` on the MCP endpoint URL, OpenClaw injects that value into `tools/call` as `_meta.sessionId` before forwarding upstream.
+- `/apps/chat` creates or resumes a gateway session with that same id and streams host-friendly SSE frames back to the browser.
+
+This is the bridge that lets a rich MCP App UI and the Agent collaborate against the same App session instead of creating two unrelated MCP connections.
+
+### Browser Compatibility Notes
+
+- `tools/list` on `/apps/mcp/{appId}` is intentionally a raw pass-through. App-only tools still appear there because the browser host may need them.
+- Model visibility filtering happens later, when OpenClaw registers App tools into `NativePluginRegistry` for Agent use.
+- UI tools with `_meta.ui.resourceUri` suppress `structuredContent` when results flow back into the model, but the browser-side MCP proxy still forwards normal MCP responses unchanged.
+- For cross-origin browser MCP clients, OpenClaw allows the MCP Streamable HTTP headers `mcp-protocol-version` and `Mcp-Session-Id` in CORS.
 
 ## Architecture
 
@@ -218,8 +247,9 @@ Every tool discovered from an MCP App is registered into the `NativePluginRegist
 
 - **Registration ID**: `mcpapp:{appId}` (e.g. `mcpapp:grocery-inventory`)
 - **Tool name prefix**: automatically applied from the manifest's `toolNamePrefix`
+- **Visibility handling**: tools marked with MCP App visibility metadata such as `"ui": { "visibility": ["app"] }` stay available to the browser host but are not registered as model-visible Agent tools
 - **Error handling**: invalid JSON arguments and remote execution errors return result text prefixed with `Error:`
-- **Structured output**: supports both text content and structured content from MCP tools
+- **Structured output**: supports both text content and structured content from MCP tools, except that UI tools suppress `structuredContent` when OpenClaw feeds results back into the model
 
 ```csharp
 // Internal flow — automatically executed during Gateway startup

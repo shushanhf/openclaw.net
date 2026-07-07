@@ -37,7 +37,11 @@ internal static class McpServiceExtensions
                     Version = "1.0.0"
                 };
             })
-            .WithHttpTransport(options => { options.Stateless = true; })
+            .WithHttpTransport(options =>
+            {
+                options.Stateless = true;
+                options.ConfigureSessionOptions = AppsMcpProxyEndpoint.ConfigureSessionOptionsAsync;
+            })
             .WithTools<OpenClawMcpTools>()
             .WithResources<OpenClawMcpResources>()
             .WithPrompts<OpenClawMcpPrompts>();

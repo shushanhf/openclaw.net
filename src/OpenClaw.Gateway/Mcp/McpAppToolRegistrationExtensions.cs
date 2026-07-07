@@ -2,6 +2,7 @@ using OpenClaw.Agent.Plugins;
 using OpenClaw.Core.Plugins;
 using OpenClaw.McpApp;
 using OpenClaw.McpApp.Shared;
+using System.Text.Json;
 
 namespace OpenClaw.Gateway.Mcp;
 
@@ -34,13 +35,17 @@ internal static class McpAppToolRegistrationExtensions
 
             foreach (var tool in app.GetToolDescriptors())
             {
+                if (!IsToolModelVisible(tool))
+                    continue;
+
                 var nativeTool = new McpAppNativeTool(
                     app.Client!,
                     tool.LocalName,
                     tool.RemoteName,
                     tool.Description,
                     tool.InputSchemaText,
-                    app);
+                    app,
+                    suppressStructuredContent: !string.IsNullOrWhiteSpace(tool.UiResourceUri));
 
                 nativeRegistry.RegisterExternalTool(nativeTool, pluginId, displayName);
             }
@@ -66,5 +71,21 @@ internal static class McpAppToolRegistrationExtensions
         }
 
         return results;
+    }
+
+    private static bool IsToolModelVisible(McpAppToolDescriptor tool)
+    {
+        if (!tool.Meta.TryGetValue("ui", out var uiElement) || uiElement.ValueKind != JsonValueKind.Object)
+            return true;
+        if (!uiElement.TryGetProperty("visibility", out var visibility) || visibility.ValueKind != JsonValueKind.Array)
+            return true;
+
+        foreach (var item in visibility.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String && string.Equals(item.GetString(), "model", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 }

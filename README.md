@@ -105,6 +105,8 @@ When the gateway finishes startup it now prints explicit phase markers, a final 
 | Integration API | `http://127.0.0.1:18789/api/integration/status` |
 | MCP endpoint | `http://127.0.0.1:18789/mcp` |
 
+If you are hosting an MCP App UI through OpenClaw.NET, use the gateway host routes instead of connecting the browser directly to the App's upstream MCP URL: discover the App via `/apps/health`, connect the browser MCP client to `/apps/mcp/{appId}`, and use `/apps/chat` for chat-host SSE bridging. See [docs/MCPAPP.md](docs/MCPAPP.md).
+
 The root URL redirects to `/chat`. For the full first-run walkthrough (including the "First 10 Minutes" runbook and debugging flow), see [docs/QUICKSTART.md](docs/QUICKSTART.md). For the project shape and repository map before changing code, see [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
 If you want a direct gateway fallback instead of the full CLI onboarding flow, run:

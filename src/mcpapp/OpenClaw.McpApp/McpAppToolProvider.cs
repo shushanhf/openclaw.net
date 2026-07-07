@@ -17,6 +17,7 @@ public sealed class McpAppNativeTool : ITool
     private readonly McpClient _client;
     private readonly string _remoteName;
     private readonly IMcpAppInfoProvider _app;
+    private readonly bool _suppressStructuredContent;
 
     public McpAppNativeTool(
         McpClient client,
@@ -24,11 +25,13 @@ public sealed class McpAppNativeTool : ITool
         string remoteName,
         string description,
         string parameterSchema,
-        IMcpAppInfoProvider app)
+        IMcpAppInfoProvider app,
+        bool suppressStructuredContent = false)
     {
         _client = client;
         _remoteName = remoteName;
         _app = app;
+        _suppressStructuredContent = suppressStructuredContent;
         Name = localName;
         Description = description;
         ParameterSchema = parameterSchema;
@@ -60,7 +63,7 @@ public sealed class McpAppNativeTool : ITool
             }
 
             var response = await _client.CallToolAsync(_remoteName, argsDict, progress: null, cancellationToken: ct);
-            var text = FormatResponseContent(response);
+            var text = FormatResponseContent(response, _suppressStructuredContent);
             var isError = response.IsError ?? false;
             return isError ? $"Error: {text}" : text;
         }
@@ -91,7 +94,7 @@ public sealed class McpAppNativeTool : ITool
         };
     }
 
-    private static string FormatResponseContent(CallToolResult response)
+    private static string FormatResponseContent(CallToolResult response, bool suppressStructuredContent)
     {
         var parts = new List<string>();
 
@@ -112,7 +115,8 @@ public sealed class McpAppNativeTool : ITool
             }
         }
 
-        if (response.StructuredContent is { } structured &&
+        if (!suppressStructuredContent &&
+            response.StructuredContent is { } structured &&
             structured.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null))
         {
             parts.Add(structured.GetRawText());

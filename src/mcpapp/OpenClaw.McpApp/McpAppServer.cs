@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -161,6 +162,7 @@ public sealed class McpAppServer : IAsyncDisposable
                 var inputSchema = tool.JsonSchema.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
                     ? "{}"
                     : tool.JsonSchema.GetRawText();
+                var meta = SerializeMeta(tool.ProtocolTool.Meta);
 
                 descriptors.Add(new McpAppToolDescriptor
                 {
@@ -168,6 +170,8 @@ public sealed class McpAppServer : IAsyncDisposable
                     LocalName = localName,
                     Description = tool.Description ?? $"MCP App tool '{remoteName}' from '{_state.Manifest.Id}'.",
                     InputSchemaText = inputSchema,
+                    UiResourceUri = ResolveUiResourceUri(tool.ProtocolTool.Meta),
+                    Meta = meta,
                 });
             }
 
@@ -350,5 +354,46 @@ public sealed class McpAppServer : IAsyncDisposable
 
         if (client is IDisposable disposable)
             disposable.Dispose();
+    }
+
+    private static Dictionary<string, JsonElement> SerializeMeta(JsonObject? meta)
+    {
+        if (meta is null || meta.Count == 0)
+            return new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+
+        var result = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var (key, value) in meta)
+        {
+            if (value is null)
+                continue;
+
+            using var document = JsonDocument.Parse(value.ToJsonString());
+            result[key] = document.RootElement.Clone();
+        }
+
+        return result;
+    }
+
+    private static string? ResolveUiResourceUri(JsonObject? meta)
+    {
+        if (meta is null)
+            return null;
+
+        if (meta["ui"] is JsonObject ui &&
+            ui["resourceUri"] is JsonValue resourceValue &&
+            resourceValue.TryGetValue<string>(out var resourceUri) &&
+            !string.IsNullOrWhiteSpace(resourceUri))
+        {
+            return resourceUri;
+        }
+
+        if (meta["ui/resourceUri"] is JsonValue flatValue &&
+            flatValue.TryGetValue<string>(out var flatUri) &&
+            !string.IsNullOrWhiteSpace(flatUri))
+        {
+            return flatUri;
+        }
+
+        return null;
     }
 }
