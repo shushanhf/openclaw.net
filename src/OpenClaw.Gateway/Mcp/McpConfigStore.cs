@@ -6,7 +6,6 @@ namespace OpenClaw.Gateway.Mcp;
 
 internal sealed class McpConfigStore
 {
-    private const string RelativePath = "mcp\\mcp.json";
     private readonly string _path;
     private readonly ILogger<McpConfigStore> _logger;
 
@@ -15,7 +14,7 @@ internal sealed class McpConfigStore
         var rootedStoragePath = Path.IsPathRooted(storagePath)
             ? storagePath
             : Path.GetFullPath(storagePath);
-        _path = Path.Combine(rootedStoragePath, RelativePath);
+        _path = Path.Combine(rootedStoragePath, "mcp", "mcp.json");
         _logger = logger;
     }
 
