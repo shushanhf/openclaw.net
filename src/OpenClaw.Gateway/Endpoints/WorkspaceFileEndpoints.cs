@@ -97,12 +97,10 @@ internal static class WorkspaceFileEndpoints
                         if (string.IsNullOrEmpty(entry.Name))
                             continue;
 
-                        // Normalise to forward-slash and strip leading slashes.
-                        var entryRelative = entry.FullName.Replace('\\', '/').TrimStart('/');
-
-                        // ZIP-slip guard: ensure the resolved path is inside targetDir.
-                        var entryFull = Path.GetFullPath(Path.Combine(targetDir, entryRelative));
-                        if (!IsInsideDirectory(entryFull, targetDir))
+                        // ZIP-slip guard: resolve both paths with GetFullPath and verify containment.
+                        var entryFull = Path.GetFullPath(Path.Combine(targetDir, entry.FullName));
+                        var fullDestDirPath = Path.GetFullPath(targetDir + Path.DirectorySeparatorChar);
+                        if (!entryFull.StartsWith(fullDestDirPath, StringComparison.Ordinal))
                             continue; // silently skip traversal attempts
 
                         Directory.CreateDirectory(Path.GetDirectoryName(entryFull)!);
